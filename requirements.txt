@@ -1,32 +1,10 @@
-# Librerías para APIs de exchanges
 ccxt==4.2.25
 requests==2.31.0
-
-# Librerías para análisis de datos
-pandas==2.1.4
-numpy==1.26.2
-
-# Librerías para Telegram
-python-telegram-bot==20.7
-
-# Librerías para automatización de navegador
 selenium==4.16.0
 webdriver-manager==4.0.1
-
-# Librería para IA (Google Gemini)
 google-generativeai==0.3.2
-
-# Librerías para Twitter
-tweepy==4.14.0
-
-# Librería para tareas programadas
 schedule==1.2.0
-
-# Librería para variables de entorno
 python-dotenv==1.0.0
-
-# Librería para manejo de fechas
 python-dateutil==2.8.2
-
-# Librería para logs
 colorlog==6.8.0
+pyperclip==1.8.2
