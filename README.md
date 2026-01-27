@@ -16,11 +16,11 @@ Bot inteligente que analiza el mercado de criptomonedas cada 2 horas, genera rep
 
 ✅ Consulta **Binance** para obtener todas las criptomonedas  
 ✅ Filtra monedas con cambios **≥10% en 24h**  
-✅ Consulta **Bybit** para cambios en las últimas **2 horas**  
+✅ Consulta **Binance** para cambios en las últimas **2 horas**  
 ✅ Analiza el sentimiento del mercado (**CoinGecko**, **Fear & Greed Index**)  
 ✅ Genera análisis y recomendaciones con **IA (Google Gemini 2.5 Flash)**  
 ✅ Envía reportes a **Telegram**  
-✅ Publica automáticamente en **Twitter/X**  
+✅ Publica automáticamente en **Twitter/X** 5 publicaciones
 ✅ Ejecución cada **2 horas** + reporte matutino a las **6 AM**  
 ✅ Logs con colores para fácil seguimiento
 
@@ -40,7 +40,6 @@ crypto-bot/
 │
 ├── services/
 │   ├── binance_service.py          # Servicio de Binance
-│   ├── bybit_service.py            # Servicio de Bybit
 │   ├── market_sentiment_service.py # Análisis de sentimiento
 │   ├── ai_analyzer_service.py      # Análisis con IA
 │   ├── telegram_service.py         # Envío a Telegram
@@ -114,14 +113,6 @@ Esto tomará unos minutos. ¡Ten paciencia! ☕
 5. **IMPORTANTE**: Solo marca permisos de **lectura** (Read)
 6. Guarda tu **API Key** y **Secret Key**
 
-#### 5.2 Bybit API
-
-1. Ve a https://www.bybit.com/
-2. Crea una cuenta
-3. Ve a "Account & Security" → "API Management"
-4. Crea una nueva API Key con permisos de **lectura**
-5. Guarda tu **API Key** y **Secret Key**
-
 #### 5.3 Bot de Telegram
 
 1. Abre Telegram en tu teléfono o computadora
@@ -134,18 +125,6 @@ Esto tomará unos minutos. ¡Ten paciencia! ☕
 6. Ahora busca el usuario: `@userinfobot`
 7. Envía el comando: `/start`
 8. Te dará tu **CHAT_ID**. ¡Guárdalo!
-
-#### 5.4 Twitter/X Developer Account
-
-1. Ve a https://developer.twitter.com/
-2. Aplica para una cuenta de desarrollador (es gratis)
-3. Crea un nuevo proyecto y una app
-4. En los permisos, selecciona "Read and Write"
-5. Obtén estas 4 claves:
-   - **API Key**
-   - **API Secret**
-   - **Access Token**
-   - **Access Token Secret**
 
 #### 5.5 Google Gemini API
 
@@ -172,19 +151,9 @@ Esto tomará unos minutos. ¡Ten paciencia! ☕
 BINANCE_API_KEY=tu_clave_aqui
 BINANCE_API_SECRET=tu_secret_aqui
 
-# BYBIT API
-BYBIT_API_KEY=tu_clave_aqui
-BYBIT_API_SECRET=tu_secret_aqui
-
 # TELEGRAM BOT
 TELEGRAM_BOT_TOKEN=tu_token_aqui
 TELEGRAM_CHAT_ID=tu_chat_id_aqui
-
-# TWITTER/X API
-TWITTER_API_KEY=tu_clave_aqui
-TWITTER_API_SECRET=tu_secret_aqui
-TWITTER_ACCESS_TOKEN=tu_token_aqui
-TWITTER_ACCESS_SECRET=tu_secret_aqui
 
 # GOOGLE GEMINI API
 GOOGLE_GEMINI_API_KEY=tu_clave_aqui
@@ -234,9 +203,7 @@ Si todo funciona bien, luego usa la **opción 3** para dejarlo corriendo automá
 - Python 3.11 o superior
 - Variables de entorno en `.env`:
   - BINANCE_API_KEY, BINANCE_API_SECRET
-  - BYBIT_API_KEY, BYBIT_API_SECRET
   - TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-  - TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
   - GOOGLE_GEMINI_API_KEY
 - Imágenes requeridas en `images/`: `morning_report.png` y `crypto_report.png` (1200×675)
 
@@ -245,10 +212,6 @@ Dependencias principales:
 
 Faltantes detectados del código:
 - pyperclip (se usa en Twitter para pegar texto). Instalar: `pip install pyperclip`
-
-Opcionales/posibles obsoletas:
-- tweepy y python-telegram-bot no se usan en el código actual (se publica vía Selenium y Telegram por requests). Puedes desinstalarlas si no las necesitas.
-- requests-oauthlib y oauthlib no son necesarias para el flujo actual.
 
 Arquitectura y archivos clave:
 - Orquestador: [bot_orchestrator.py](file:///i:/Proyectos/BotCryptoV2/bot_orchestrator.py)
@@ -265,7 +228,7 @@ Arquitectura y archivos clave:
    └─> Obtiene todas las criptomonedas
    └─> Filtra las que cambiaron ≥10% en 24h
 
-2. 📊 CONSULTA BYBIT
+2. 📊 CONSULTA BINANCE
    └─> Para cada moneda filtrada
    └─> Obtiene el cambio en las últimas 2 horas
 
@@ -366,27 +329,6 @@ Basado en el análisis, SOL muestra el mayor potencial...
 - Usa solo claves API con permisos de **lectura** (las APIs de trading no necesitan permisos de escritura)
 - Mantén tu computadora segura con antivirus actualizado
 
-## 📈 Agregar al Portfolio
-
-Este proyecto es **perfecto** para tu GitHub y LinkedIn porque demuestra:
-
-✅ Integración de múltiples APIs  
-✅ Uso de Inteligencia Artificial  
-✅ Automatización de tareas  
-✅ Web scraping con Selenium  
-✅ Arquitectura limpia y modular  
-✅ Manejo de errores y logs  
-✅ Programación de tareas  
-✅ Buenas prácticas de código
-
-### Qué mencionar en LinkedIn:
-
-- "Bot de trading automatizado con Python"
-- "Integración de APIs de Binance, Bybit y CoinGecko"
-- "Análisis con IA usando Google Gemini"
-- "Automatización de publicaciones en redes sociales"
-- "Arquitectura modular y escalable"
-
 ## 🚀 Próximas Funcionalidades (Tú las puedes agregar)
 
 - [ ] Base de datos para histórico de análisis
@@ -432,3 +374,5 @@ Proyecto de código abierto para fines educativos.
 <a href="https://www.notion.so/AndresDvst"><img src="https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white" /></a>
 <a href="https://github.com/AndresDvst/BotCryptoV2"><img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" /></a>
 </div>
+
+
