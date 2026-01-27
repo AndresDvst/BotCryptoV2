@@ -10,7 +10,6 @@ crypto-bot/
 ├── 📦 requirements.txt                 # Librerías necesarias
 ├── 🔐 .env                            # Configuración privada (CREAR)
 ├── 📋 .env.example                    # Plantilla de configuración
-├── 🧪 check_setup.py                  # Verificador de instalación
 │
 ├── 📖 README.md                        # Documentación principal
 ├── 🐦 TWITTER_SETUP.md                # Guía de Twitter
@@ -22,7 +21,6 @@ crypto-bot/
 │
 ├── 📁 services/
 │   ├── 💰 binance_service.py          # Consulta a Binance
-│   ├── 📊 bybit_service.py            # Consulta a Bybit
 │   ├── 🌐 market_sentiment_service.py # Análisis de sentimiento
 │   ├── 🤖 ai_analyzer_service.py      # Análisis con IA (Gemini)
 │   ├── 📱 telegram_service.py         # Envío a Telegram
@@ -55,7 +53,7 @@ crypto-bot/
     │           │          │          │          │
     ▼           ▼          ▼          ▼          ▼
 ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
-│Binance │ │ Bybit  │ │Sentim. │ │   IA   │ │Telegram│
+│Binance │ │Binance │ │Sentim. │ │   IA   │ │Telegram│
 │Service │ │Service │ │Service │ │Service │ │Service │
 └───┬────┘ └───┬────┘ └───┬────┘ └───┬────┘ └───┬────┘
     │          │          │          │          │
@@ -89,7 +87,7 @@ crypto-bot/
    └─ Output: Lista de monedas significativas
       │
       ▼
-2️⃣ BYBIT
+2️⃣ BINANCE 2H
    ├─ Input: Lista de monedas de Binance
    ├─ Proceso: Consulta histórico de 2 horas
    ├─ Cálculo: Cambio porcentual
@@ -125,15 +123,9 @@ crypto-bot/
 Config
 ├── BINANCE_API_KEY         # Clave Binance
 ├── BINANCE_API_SECRET      # Secret Binance
-├── BYBIT_API_KEY           # Clave Bybit
-├── BYBIT_API_SECRET        # Secret Bybit
 ├── TELEGRAM_BOT_TOKEN      # Token del bot
 ├── TELEGRAM_CHAT_ID        # ID del chat
-├── TWITTER_API_KEY         # Clave Twitter
-├── TWITTER_API_SECRET      # Secret Twitter
-├── TWITTER_ACCESS_TOKEN    # Token de acceso
-├── TWITTER_ACCESS_SECRET   # Secret de acceso
-├── ANTHROPIC_API_KEY       # Clave Claude
+├── GEMINI_API_KEY       # Clave Claude
 ├── MIN_CHANGE_PERCENT      # Filtro (default: 10%)
 ├── MORNING_IMAGE_PATH      # Imagen 6 AM
 ├── REPORT_IMAGE_PATH       # Imagen 2h
@@ -164,10 +156,10 @@ Clase: BinanceService
     └─ Información detallada de una moneda
 ```
 
-### 📊 Bybit Service
+### 📊 Binance Service 2H
 
 ```
-Clase: BybitService
+Clase: BinanceServicie 2H
 ├── __init__()
 │   └─ Inicializa conexión con ccxt.bybit
 │
@@ -373,10 +365,9 @@ __pycache__/
 ```
 Total de Archivos: 17
 Líneas de Código: ~1,500
-Servicios: 6
-APIs Integradas: 6
+Servicios: 5
+APIs Integradas: 5
   ├─ Binance
-  ├─ Bybit
   ├─ CoinGecko
   ├─ Fear & Greed Index
   ├─ Google Gemini
@@ -386,7 +377,7 @@ Tecnologías:
 ├─ Python 3.11+
 ├─ ccxt (exchanges)
 ├─ Selenium (automatización)
-├─ Anthropic (IA)
+├─ Gemini (IA)
 ├─ Schedule (tareas)
 └─ Telegram Bot API
 ```
@@ -416,29 +407,3 @@ Fase 4: Mejoras 🚀
 ├─ Más indicadores
 └─ ¡Tu imaginación!
 ```
-
----
-
-## 💡 Tips para el README de GitHub
-
-Cuando subas esto a GitHub, incluye:
-
-```markdown
-## 🎥 Demo
-[Video o GIFs mostrando el bot en acción]
-
-## 📊 Tecnologías
-![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
-![Selenium](https://img.shields.io/badge/Selenium-43B02A?logo=selenium&logoColor=white)
-![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?logo=telegram&logoColor=white)
-
-## ⭐ Features
-- Análisis en tiempo real
-- IA integrada
-- Automatización completa
-- Código modular y limpio
-```
-
----
-
-**¿Listo para impresionar a los reclutadores?** 🚀
