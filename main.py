@@ -55,6 +55,20 @@ def main():
         )
         logger.info("=" * 60 + "\n")
         
+        # Validar configuración antes de continuar
+        logger.info("🔍 Validando configuración...")
+        try:
+            Config.validate()
+            logger.info("✅ Configuración válida\n")
+        except ValueError as e:
+            logger.error(f"❌ Error de configuración: {e}")
+            logger.error("\n💡 Solución:")
+            logger.error("   1. Verifica que el archivo .env exista")
+            logger.error("   2. Copia .env.example a .env si no existe")
+            logger.error("   3. Completa todas las claves API requeridas")
+            logger.error("   4. Revisa la documentación en README.md")
+            sys.exit(1)
+        
         # Crear instancia del bot
         global bot
         bot = CryptoBotOrchestrator()

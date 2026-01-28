@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+.venv
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Chrome/Selenium
+utils/chrome-win64/
+chromedriver.exe
+*.crx
+
+# Archivos de debug temporal
+*.html
+*.png
+utils/twitter_login_error_*
+
+# Datos temporales
+tweet_log.json
+*.tmp
+*.temp
+*.bak
+
+# Binarios
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Bases de datos
+*.db
+*.sqlite
+*.sqlite3
+
+# Archivos de configuración local
+config.local.py
