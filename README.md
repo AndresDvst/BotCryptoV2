@@ -1,4 +1,4 @@
-# 🤖 Crypto Trading Bot - Análisis Automatizado con IA
+# 🤖 Crypto Trading Bot V3 - Análisis Multi-Mercado con IA
 
 <div align="center">
 <a href="https://wa.me/+573001234567?text=Hola%20desde%20BotCryptoV2%20🚀" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" /></a>
@@ -14,13 +14,47 @@
 
 <div align="center">
 
-**Bot inteligente que analiza el mercado de criptomonedas cada 2 horas, genera reportes con IA y los publica automáticamente en Telegram y Twitter**
+**Bot inteligente de trading que analiza criptomonedas, mercados tradicionales (stocks/forex/commodities), genera señales técnicas con IA, monitorea precios en tiempo real, y publica automáticamente en Telegram y Twitter**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-orange.svg)](https://ai.google.dev/)
+[![Version](https://img.shields.io/badge/Version-3.0-green.svg)](https://github.com/AndresDvst/BotCryptoV2)
 
 </div>
+
+---
+
+## 🆕 Novedades en V3
+
+### 🌟 Nuevas Funcionalidades Implementadas
+
+- **📈 Análisis de Mercados Tradicionales**
+  - Acciones del S&P 500 (27 principales)
+  - Pares de Forex (6 principales)
+  - Commodities (Oro, Plata, Crudo, Brent, etc.)
+  - Publicación automática en Twitter y Telegram
+
+- **🎯 Análisis Técnico Avanzado**
+  - Indicadores: RSI, MACD, Bollinger Bands, ATR, EMAs, SMAs, Stochastic
+  - Señales de trading: LONG/SHORT/NEUTRAL con confianza 0-100%
+  - Position Sizing automático basado en riesgo
+  - Stop Loss y Take Profit dinámicos (ATR-based)
+  - Generación de gráficos visuales con matplotlib
+
+- **🔄 Modo Continuo con Monitoreo en Tiempo Real**
+  - Arquitectura multihilo (threading)
+  - Detección de pumps/dumps >5% cada 5 minutos
+  - Detección de nuevos pares en Binance
+  - Alertas automáticas en Twitter y Telegram
+  - Alterna entre análisis completos y monitoreo de 2 horas
+
+- **📰 Scraper de Noticias con IA**
+  - Integración con CryptoPanic API
+  - Scraping de Google News RSS (5 feeds)
+  - Filtro de relevancia con Gemini (scoring 1-10)
+  - Sistema de deduplicación con hash MD5
+  - Publicación automática de noticias relevantes (score ≥7)
 
 ---
 
@@ -83,6 +117,27 @@
   - `.gitignore` completo
   - Permisos de solo lectura en APIs
 
+### 🆕 Nuevas Funcionalidades (Enterprise V2)
+
+- **🗄️ Base de Datos MySQL**
+  - Migración a base de datos robusta (MySQL)
+  - Configuración automática (crea DB y tablas)
+  - Persistencia de datos de alto rendimiento
+
+- **📊 Dashboard Web Integrado**
+  - Acceso directo desde el menú principal
+  - Visualización en tiempo real
+  - Gráficos históricos interactivos
+
+- **🛠️ Herramientas de Mantenimiento**
+  - Limpieza de repositorio automatizada
+  - Gestión y purga de base de datos desde el bot
+  - Logs mejorados con rotación diaria
+
+- **✅ Tests Unitarios**
+  - Suite completa de tests con pytest
+  - Cobertura de código para servicios críticos
+
 ---
 
 ## 🚀 Instalación Rápida
@@ -90,7 +145,8 @@
 ### 1️⃣ Requisitos Previos
 
 - Python 3.11 o superior
-- Cuenta en Binance (para API)
+- **Servidor MySQL** (Local o Remoto)
+- Cuenta en Binance (API)
 - Bot de Telegram
 - Cuenta de Twitter/X
 - API Key de Google Gemini
@@ -270,6 +326,48 @@ Ejecuta análisis inmediato + programa ejecuciones automáticas.
 
 - Ver resultados inmediatos
 - Luego dejar corriendo automáticamente
+
+### 🆕 Nuevas Funcionalidades
+
+#### ✅ Ejecutar Tests
+
+```bash
+# Ejecutar todos los tests
+pytest tests/ -v
+
+# Con cobertura de código
+pytest tests/ -v --cov=. --cov-report=html
+
+# Ver reporte de cobertura
+# Abre htmlcov/index.html en tu navegador
+```
+
+#### 📊 Dashboard Web
+
+```bash
+# Iniciar dashboard
+python dashboard/app.py
+
+# Abre en tu navegador
+# http://localhost:5000
+```
+
+**Características del Dashboard**:
+
+- 📈 Gráficos históricos de Fear & Greed Index
+- 💰 Top monedas del último análisis
+- 📊 Estadísticas generales
+- 🔄 Actualización automática cada 30 segundos
+
+#### 🗄️ Base de Datos
+
+La base de datos se crea automáticamente en `data/crypto_bot.db` y guarda:
+
+- Todos los análisis realizados
+- Datos de monedas por análisis
+- Timestamps y métricas
+
+**No requiere configuración adicional** ✅
 
 ---
 

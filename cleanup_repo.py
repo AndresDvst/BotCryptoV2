@@ -14,19 +14,23 @@ def cleanup_repository():
     
     # Directorios a eliminar
     directories_to_remove = [
-        'venv',
         '__pycache__',
-        'logs',
-        'utils/chrome-win64',
         'utils/__pycache__',
         'config/__pycache__',
         'services/__pycache__',
+        'database/__pycache__',  # Agregado database
+        'tests/__pycache__',     # Agregado tests
         '.pytest_cache',
         '.mypy_cache',
         'build',
         'dist',
         '*.egg-info'
     ]
+    
+    # Directorios Opcionales (comentados por seguridad en modo runtime)
+    # 'venv',
+    # 'logs',
+    # 'utils/chrome-win64',
     
     # Archivos a eliminar
     files_to_remove = [

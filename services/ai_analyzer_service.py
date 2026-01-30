@@ -2,13 +2,146 @@
 Servicio de análisis con IA utilizando Google Gemini.
 Analiza los datos del mercado y genera recomendaciones.
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 import google.generativeai as genai
-from typing import Dict, List
+import openai
+from typing import Dict, List, Optional
+import concurrent.futures
 from config.config import Config
 from utils.logger import logger
 import json
+import re
 
 class AIAnalyzerService:
+
+    def __init__(self):
+        self.active_provider = None # 'gemini' o 'openai'
+        self.gemini_model = None
+        self.openai_client = None
+        
+        # Configurar Gemini
+        try:
+            genai.configure(api_key=Config.GOOGLE_GEMINI_API_KEY)
+            self.generation_config = {
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 2048,
+            }
+            self.safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
+            self.gemini_model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash",
+                generation_config=self.generation_config,
+                safety_settings=self.safety_settings
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Error al configurar Gemini: {e}")
+
+        # Configurar OpenAI
+        try:
+            if Config.OPENAI_API_KEY:
+                self.openai_client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+        except Exception as e:
+            logger.warning(f"⚠️ Error al configurar OpenAI: {e}")
+
+        # Probar y seleccionar el mejor proveedor
+        self.check_best_provider()
+
+    def _run_with_timeout(self, fn, timeout_seconds: int):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(fn)
+                return future.result(timeout=timeout_seconds)
+        except Exception as e:
+            return e
+
+    def _test_gemini(self):
+        if not self.gemini_model:
+            return RuntimeError("Gemini no configurado")
+        response = self.gemini_model.generate_content("Hola")
+        if not response or not response.text:
+            return RuntimeError("Respuesta vacía de Gemini")
+        return True
+
+    def _test_openai(self):
+        if not self.openai_client:
+            return RuntimeError("OpenAI no configurado")
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hola"}],
+            max_tokens=5
+        )
+        if not response.choices:
+            return RuntimeError("Respuesta vacía de OpenAI")
+        return True
+
+    def check_best_provider(self):
+        """Verifica qué API responde y selecciona la activa para este ciclo"""
+        logger.info("🔄 Verificando disponibilidad de IAs...")
+        
+        # 1. Probar Gemini
+        try:
+            if self.gemini_model:
+                logger.info("🧪 Probando Gemini...")
+                result = self._run_with_timeout(self._test_gemini, timeout_seconds=6)
+                if result is True:
+                    self.active_provider = 'gemini'
+                    logger.info("✅ Gemini ACTIVO y seleccionado.")
+                    return
+                if isinstance(result, Exception):
+                    raise result
+        except Exception as e:
+            logger.warning(f"⚠️ Gemini falló la prueba: {e}")
+
+        # 2. Probar OpenAI (Fallback)
+        try:
+            if self.openai_client:
+                logger.info("🧪 Probando OpenAI...")
+                result = self._run_with_timeout(self._test_openai, timeout_seconds=6)
+                if result is True:
+                    self.active_provider = 'openai'
+                    logger.info("✅ OpenAI ACTIVO y seleccionado.")
+                    return
+                if isinstance(result, Exception):
+                    raise result
+        except Exception as e:
+            logger.warning(f"⚠️ OpenAI falló la prueba: {e}")
+            
+        logger.error("❌ NINGUNA IA DISPONIBLE. El bot funcionará sin análisis inteligente.")
+        self.active_provider = None
+
+    def _generate_content(self, prompt: str) -> str:
+        """Genera contenido usando el proveedor activo"""
+        if self.active_provider == 'gemini':
+            try:
+                response = self.gemini_model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                logger.error(f"❌ Error generando con Gemini: {e}")
+                # Intentar switch a OpenAI si falla en runtime
+                if self.openai_client:
+                    self.active_provider = 'openai'
+                    return self._generate_content(prompt)
+                return ""
+                
+        elif self.active_provider == 'openai':
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini", # Usamos gpt-4o-mini por ser rápido y eficiente (text-embedding no genera texto)
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"❌ Error generando con OpenAI: {e}")
+                return ""
+        
+        return ""
 
     def generate_twitter_4_summaries(self, market_sentiment: Dict, coins_only_binance: list, coins_both_enriched: list, max_chars: int = 280) -> dict:
         """
@@ -92,34 +225,11 @@ class AIAnalyzerService:
             "up_2h": tweet_up_2h,
             "down_2h": tweet_down_2h
         }
-    def __init__(self):
-        try:
-            genai.configure(api_key=Config.GOOGLE_GEMINI_API_KEY)
-            self.generation_config = {
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "top_k": 40,
-                "max_output_tokens": 2048,
-            }
-            self.safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-            ]
-            self.model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
-                generation_config=self.generation_config,
-                safety_settings=self.safety_settings
-            )
-            logger.info("✅ Cliente de IA (Gemini) inicializado")
-        except Exception as e:
-            logger.error(f"❌ Error al inicializar Gemini: {e}")
-            raise
 
     def analyze_and_recommend(self, coins: List[Dict], market_sentiment: Dict) -> Dict:
-        logger.info("🤖 Analizando datos con IA (Gemini)...")
+        logger.info(f"🤖 Analizando datos con IA ({self.active_provider})...")
         prompt = f"""Eres un analista experto de criptomonedas. Analiza los siguientes datos y genera un reporte conciso:
+
 
 DATOS DEL MERCADO:
 {json.dumps(market_sentiment, indent=2, ensure_ascii=False)}
@@ -136,11 +246,11 @@ Por favor, proporciona:
 
 Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto más amigable."""
         try:
-            response = self.model.generate_content(prompt)
-            ai_analysis = response.text
+            ai_analysis = self._generate_content(prompt)
             logger.info("✅ Análisis de IA completado")
             result = {
                 'full_analysis': ai_analysis,
+
                 'market_overview': self._extract_section(ai_analysis, 1),
                 'top_coins_analysis': self._extract_section(ai_analysis, 2),
                 'recommendation': self._extract_section(ai_analysis, 3),
@@ -148,6 +258,40 @@ Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto m�
                 'warnings': self._extract_section(ai_analysis, 5),
                 'timestamp': market_sentiment.get('fear_greed_index', {}).get('timestamp', ''),
             }
+            # Segunda pasada: obtener Top 3 Compras/Ventas en JSON estructurado
+            json_prompt = f"""Devuelve en JSON válido las mejores oportunidades:
+            {{
+              "top_buys": [
+                {{"symbol": "SYM1", "reason": "breve razón"}},
+                {{"symbol": "SYM2", "reason": "breve razón"}},
+                {{"symbol": "SYM3", "reason": "breve razón"}}
+              ],
+              "top_sells": [
+                {{"symbol": "SYM1", "reason": "breve razón"}},
+                {{"symbol": "SYM2", "reason": "breve razón"}},
+                {{"symbol": "SYM3", "reason": "breve razón"}}
+              ],
+              "confidence": 1-10
+            }}
+            Basado en estas monedas y datos:
+            Monedas: {json.dumps(coins[:10], ensure_ascii=False)}
+            Sentimiento: {json.dumps(market_sentiment, ensure_ascii=False)}
+            Responde SOLO el JSON."""
+            try:
+                jr_text = self._generate_content(json_prompt)
+                txt = jr_text.strip()
+                # Limpieza extra para OpenAI que a veces incluye markdown
+                if txt.startswith("```"):
+                    txt = txt.replace("```json", "").replace("```", "")
+                parsed = json.loads(txt)
+                if isinstance(parsed, dict):
+                    result['top_buys'] = parsed.get('top_buys', [])
+                    result['top_sells'] = parsed.get('top_sells', [])
+                    conf = parsed.get('confidence', None)
+                    if isinstance(conf, int) and 1 <= conf <= 10:
+                        result['confidence_level'] = conf
+            except Exception:
+                pass
             return result
         except Exception as e:
             logger.error(f"❌ Error al analizar con IA: {e}")
@@ -177,7 +321,6 @@ Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto m�
 
     def _extract_confidence(self, text: str) -> int:
         try:
-            import re
             patterns = [
                 r'(\d+)/10',
                 r'(\d+)\s*de\s*10',
@@ -245,3 +388,202 @@ Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto m�
         except Exception as e:
             logger.error(f"❌ Error al generar tweet: {e}")
             return {"up": "📊 Análisis de mercado cripto actualizado.", "down": "📊 Análisis de mercado cripto actualizado."}
+    
+    def analyze_news_batch(self, news_titles: List[str]) -> List[Dict]:
+        """
+        Analiza un lote de noticias y selecciona las más importantes.
+        Soporta Gemini y OpenAI.
+        """
+        if not news_titles:
+            return []
+            
+        # Preparar el prompt
+        titles_formatted = "\n".join([f"{i}. {title}" for i, title in enumerate(news_titles)])
+        
+        prompt = f"""Eres un experto analista de noticias financieras y criptomonedas.
+Analiza la siguiente lista de titulares de noticias y selecciona ÚNICAMENTE las más importantes y relevantes (impacto medio/alto en el mercado).
+
+LISTA DE NOTICIAS:
+{titles_formatted}
+
+INSTRUCCIONES:
+1. Ignora noticias irrelevantes, spam, o de bajo impacto.
+2. Selecciona las noticias con score de relevancia >= 7 sobre 10.
+3. Clasifica cada noticia en: 'crypto' (general), 'markets' (bolsa/forex/macro), 'signals' (señales de trading específicas).
+4. Devuelve el resultado en formato JSON puro (sin markdown).
+
+FORMATO DE RESPUESTA JSON (Lista de objetos):
+[
+  {{
+    "original_index": <número del índice original en la lista>,
+    "score": <número 7-10>,
+    "summary": "<Resumen de 1 linea en español>",
+    "category": "<crypto|markets|signals>"
+  }},
+  ...
+]
+"""
+        try:
+            def run_provider(provider: str) -> str:
+                if provider == 'gemini':
+                    response = self.gemini_model.generate_content(prompt)
+                    return response.text
+                if provider == 'openai':
+                    response = self.openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    return response.choices[0].message.content
+                raise RuntimeError("Proveedor inválido")
+
+            if self.active_provider not in ("gemini", "openai"):
+                logger.error("❌ Ningún proveedor de IA activo para analizar noticias.")
+                return []
+
+            try:
+                text = run_provider(self.active_provider)
+            except Exception as e:
+                logger.warning(f"⚠️ Falló {self.active_provider} en noticias: {e}")
+                fallback = 'openai' if self.active_provider == 'gemini' else 'gemini'
+                if fallback == 'openai' and not self.openai_client:
+                    raise e
+                if fallback == 'gemini' and not self.gemini_model:
+                    raise e
+                self.active_provider = fallback
+                text = run_provider(self.active_provider)
+
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if len(lines) > 2:
+                    if "json" in lines[0]:
+                        text = "\n".join(lines[1:-1])
+                    else:
+                        text = text.replace("```json", "").replace("```", "")
+                else:
+                    text = text.replace("```json", "").replace("```", "")
+
+            text = text.replace("```json", "").replace("```", "").strip()
+            results = json.loads(text)
+            valid_results = []
+            if isinstance(results, list):
+                for item in results:
+                    if isinstance(item, dict) and 'original_index' in item and 'score' in item:
+                        valid_results.append(item)
+
+            logger.info(f"✅ Análisis por lote completado ({self.active_provider}). Seleccionadas {len(valid_results)} noticias relevantes.")
+            return valid_results
+        except Exception as e:
+            logger.error(f"❌ Error en análisis por lote de noticias ({self.active_provider}): {e}")
+            return []
+
+    def analyze_text(self, text: str, context: str = "") -> Dict:
+        """
+        Analiza un texto genérico y devuelve un score de relevancia.
+        Usado para filtrar noticias.
+        
+        Args:
+            text: Texto a analizar
+            context: Contexto adicional (opcional)
+            
+        Returns:
+            Dict con 'score' (0-10) y 'summary'
+        """
+        try:
+            prompt = f"""Analiza la siguiente noticia y asigna un score de relevancia del 0 al 10.
+            
+Noticia: {text}
+
+Responde SOLO con un JSON en este formato:
+{{
+    "score": <número del 0 al 10>,
+    "summary": "<resumen breve en 1 línea>"
+}}
+
+Criterios:
+- 10: Noticia extremadamente importante (crash, regulación mayor, hack grande)
+- 7-9: Noticia muy relevante (movimientos significativos, anuncios importantes)
+- 4-6: Noticia moderadamente interesante
+- 1-3: Noticia poco relevante
+- 0: Spam o irrelevante"""
+
+            result_text = ""
+            if self.active_provider == 'gemini':
+                response = self.gemini_model.generate_content(prompt)
+                result_text = response.text
+            elif self.active_provider == 'openai':
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result_text = response.choices[0].message.content
+            else:
+                return {'score': 5, 'summary': text[:100]}
+
+            result_text = result_text.strip()
+            
+            # Extraer JSON
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+            
+            result = json.loads(result_text)
+            return {
+                'score': int(result.get('score', 5)),
+                'summary': result.get('summary', text[:100])
+            }
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error en analyze_text ({self.active_provider}): {e}")
+            return {'score': 5, 'summary': text[:100]}
+
+    def classify_news_category(self, title: str, summary: str = "") -> Dict:
+        """
+        Clasifica una noticia en 'crypto', 'markets' o 'signals'.
+        Usa título y resumen para mejorar la precisión.
+        Returns:
+            Dict con 'category' y 'confidence' (0-10)
+        """
+        try:
+            prompt = f"""Clasifica la noticia en UNA sola categoría: crypto, markets o signals.
+Titulo: {title}
+Resumen: {summary}
+
+Reglas:
+- crypto: todo lo relacionado con criptomonedas, exchanges, tokens, DeFi, blockchain.
+- markets: acciones, índices bursátiles, forex, commodities, macroeconomía tradicional.
+- signals: alertas de trading, oportunidades LONG/SHORT, setups técnicos, pumps/dumps.
+
+Responde SOLO con JSON:
+{{
+  "category": "<crypto|markets|signals>",
+  "confidence": <entero 0-10>
+}}"""
+            result_text = ""
+            if self.active_provider == 'gemini':
+                response = self.gemini_model.generate_content(prompt)
+                result_text = response.text
+            elif self.active_provider == 'openai':
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result_text = response.choices[0].message.content
+            else:
+                 return {"category": "crypto", "confidence": 5}
+
+            result_text = result_text.strip()
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+            result = json.loads(result_text)
+            category = result.get("category", "crypto").lower()
+            if category not in ("crypto", "markets", "signals"):
+                category = "crypto"
+            confidence = int(result.get("confidence", 7))
+            return {"category": category, "confidence": min(max(confidence, 0), 10)}
+        except Exception as e:
+            logger.warning(f"⚠️ Error en classify_news_category ({self.active_provider}): {e}")
+            return {"category": "crypto", "confidence": 5}

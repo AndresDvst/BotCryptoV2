@@ -60,7 +60,12 @@ def setup_logger(name='CryptoBot'):
         '%(asctime)s - %(levelname)-8s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    file_handler = logging.FileHandler(f'logs/bot_{datetime.now().strftime("%Y%m%d")}.log', encoding='utf-8')
+    # Asegurar que existe el directorio de logs
+    log_dir = 'logs'
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    file_handler = logging.FileHandler(f'{log_dir}/bot_{datetime.now().strftime("%Y%m%d")}.log', encoding='utf-8')
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
     

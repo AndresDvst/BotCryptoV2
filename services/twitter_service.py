@@ -15,10 +15,12 @@ import time
 import random
 from config.config import Config
 from utils.logger import logger
-import os
-import subprocess
+import time
 import sys
+import os
 from datetime import datetime
+import json
+import hashlib
 
 class TwitterService:
     """Servicio para publicar en Twitter usando Selenium"""
@@ -36,6 +38,7 @@ class TwitterService:
             chrome_options = Options()
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--remote-debugging-port=9222')
             # Configuración de visibilidad: usar headless según configuración
             if getattr(Config, 'TWITTER_HEADLESS', False):
                 # Selenium 4+ recomienda '--headless=new' en algunos entornos
@@ -63,18 +66,26 @@ class TwitterService:
             chrome_options.add_argument('--disable-default-apps')
             chrome_options.add_argument('--no-first-run')
             chrome_options.add_argument('--disable-extensions')
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
 
-            # Si el usuario especificó un perfil de Chrome a reutilizar, úsalo
+
+            # Configurar perfil de Chrome persistente para mantener sesión de Twitter
             user_data_dir = getattr(Config, 'CHROME_USER_DATA_DIR', None)
-            if user_data_dir:
-                # Asegurarse que la ruta exista
-                if os.path.exists(user_data_dir):
-                    chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
-                    logger.info(f"🔑 Usando perfil de usuario Chrome: {user_data_dir}")
-                else:
-                    logger.warning(f"⚠️ CHROME_USER_DATA_DIR no existe: {user_data_dir}")
+            
+            # Si no hay configuración, crear perfil automático en el proyecto
+            if not user_data_dir:
+                user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
+                # Crear directorio si no existe
+                os.makedirs(user_data_dir, exist_ok=True)
+                logger.info(f"📁 Creando perfil de Chrome automático: {user_data_dir}")
+            
+            # Usar el perfil (existente o nuevo)
+            if os.path.exists(user_data_dir):
+                chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
+                chrome_options.add_argument('--profile-directory=Default')
+                logger.info(f"🔑 Usando perfil de Chrome persistente: {user_data_dir}")
+            else:
+                logger.warning(f"⚠️ No se pudo crear perfil de Chrome: {user_data_dir}")
+
 
             # Simular un navegador real y abrir ventana maximizada para ver acciones
             chrome_options.add_argument('--start-maximized')
@@ -91,15 +102,20 @@ class TwitterService:
             if sys.platform == 'win32':
                 devnull = open(os.devnull, 'w')
 
-            # Priorizar driver local especificado por variable de entorno (útil si webdriver-manager falla)
-            driver_path = os.getenv('CHROMEDRIVER_PATH')
+            # Priorizar driver desde configuración
+            driver_path = Config.CHROMEDRIVER_PATH
+            if driver_path and os.path.isfile(driver_path):
+                 logger.info(f"🔧 Usando chromedriver desde CONFIG: {driver_path}")
+            else:
+                 driver_path = os.getenv('CHROMEDRIVER_PATH')
+            
             if driver_path:
                 if not os.path.isfile(driver_path):
                     logger.error(f"❌ CHROMEDRIVER_PATH establecido pero no existe: {driver_path}")
                     if devnull:
                         devnull.close()
                     return False
-                logger.info(f"🔧 Usando chromedriver desde CHROMEDRIVER_PATH: {driver_path}")
+                logger.info(f"🔧 Usando chromedriver: {driver_path}")
                 # Crear servicio silenciando completamente stdout/stderr
                 service = Service(driver_path, log_path=os.devnull)
                 service.stdout = subprocess.DEVNULL
@@ -239,13 +255,75 @@ class TwitterService:
                 pass
             return False
     
-    def post_tweet(self, text: str, image_path: str = None) -> bool:
+    def _history_path(self) -> str:
+        return os.path.join(os.getcwd(), 'tweet_history.json')
+    
+    def _load_history(self) -> list:
+        try:
+            path = self._history_path()
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return []
+    
+    def _save_history(self, history: list):
+        try:
+            if len(history) > 1000:
+                history = history[-1000:]
+            with open(self._history_path(), 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    
+    def _hash_text(self, text: str) -> str:
+        return hashlib.sha256(text.strip().encode('utf-8')).hexdigest()
+    
+    def _is_duplicate_recent(self, text: str, hours: float = 2.0) -> bool:
+        try:
+            h = self._hash_text(text)
+            cutoff = time.time() - (hours * 3600)
+            for item in self._load_history():
+                if item.get('hash') == h and item.get('timestamp', 0) >= cutoff:
+                    return True
+        except Exception:
+            return False
+        return False
+    
+    def _register_tweet(self, text: str, category: str):
+        try:
+            history = self._load_history()
+            history.append({
+                'hash': self._hash_text(text),
+                'timestamp': time.time(),
+                'category': category
+            })
+            self._save_history(history)
+        except Exception:
+            pass
+    
+    def _mutate_crypto_text(self, text: str) -> str:
+        try:
+            import re
+            symbols = re.findall(r'\b[A-Z0-9]{2,6}\b', text)
+            if symbols:
+                target = symbols[-1]
+                mutated = text.replace(target, '2ND ANUNCIO', 1)
+                if mutated.strip() != text.strip():
+                    return mutated
+            return (text.strip() + "\n2ND ANUNCIO").strip()
+        except Exception:
+            return (text.strip() + "\n2ND ANUNCIO").strip()
+    
+    def post_tweet(self, text: str, image_path: str = None, category: str = 'crypto') -> bool:
         """
         Publica un tweet con texto y opcionalmente una imagen.
         
         Args:
             text: Texto del tweet (máximo 280 caracteres)
             image_path: Ruta de la imagen a adjuntar (opcional)
+            category: Categoría de publicación ('crypto', 'markets', 'news', 'signals', 'crypto_stable')
             
         Returns:
             True si se publicó correctamente
@@ -254,6 +332,14 @@ class TwitterService:
             if not self.driver:
                 logger.error("❌ Driver no inicializado. Ejecuta login_twitter primero.")
                 return False
+            
+            if self._is_duplicate_recent(text, hours=2.0):
+                if category in ('markets', 'news', 'crypto_stable'):
+                    logger.info("⏭️ Tweet duplicado en las últimas 2h, saltando publicación")
+                    return False
+                else:
+                    logger.info("♻️ Tweet duplicado detectado (crypto). Ajustando contenido con '2ND ANUNCIO'")
+                    text = self._mutate_crypto_text(text)
             
             logger.info("📝 Publicando tweet...")
             
@@ -306,6 +392,10 @@ class TwitterService:
                             EC.invisibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
                         )
                         logger.info("✅ Tweet publicado exitosamente")
+                        try:
+                            self._register_tweet(text, category)
+                        except Exception:
+                            pass
                         self._human_delay(2, 3)
                         return True
                     except:
@@ -335,6 +425,10 @@ class TwitterService:
                                     pass
                                 
                                 logger.info("✅ Tweet publicado exitosamente")
+                                try:
+                                    self._register_tweet(text, category)
+                                except Exception:
+                                    pass
                                 return True
                 except:
                     pass
@@ -370,6 +464,10 @@ class TwitterService:
                             pass
                         
                         logger.info("✅ Tweet publicado exitosamente")
+                        try:
+                            self._register_tweet(text, category)
+                        except Exception:
+                            pass
                         return True
                 except Exception as js_error:
                     logger.warning(f"⚠️ Error con JavaScript: {js_error}")
@@ -396,6 +494,10 @@ class TwitterService:
                                 pass
                             
                             logger.info("✅ Tweet publicado exitosamente")
+                            try:
+                                self._register_tweet(text, category)
+                            except Exception:
+                                pass
                             return True
                 except Exception as parent_error:
                     logger.warning(f"⚠️ Error buscando en parent: {parent_error}")

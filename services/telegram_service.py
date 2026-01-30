@@ -3,7 +3,6 @@
 Servicio para enviar mensajes a Telegram.
 Envía reportes y análisis al bot de Telegram configurado.
 """
-# -*- coding: utf-8 -*-
 import requests
 from typing import Dict
 from config.config import Config
@@ -12,33 +11,50 @@ from utils.logger import logger
 class TelegramService:
     """Servicio para enviar mensajes a Telegram"""
     
-    def __init__(self):
-        """Inicializa el servicio de Telegram"""
-        self.bot_token = Config.TELEGRAM_BOT_TOKEN
-        self.chat_id = Config.TELEGRAM_CHAT_ID
-        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
-        logger.info("✅ Servicio de Telegram inicializado")
     
-    def send_message(self, message: str, parse_mode: str = "HTML") -> bool:
-        """
-        Envía un mensaje al chat de Telegram.
+    def __init__(self):
+        """Inicializa el servicio de Telegram con soporte multi-bot"""
+        self.chat_id = Config.TELEGRAM_CHAT_ID
+        self.chat_id_crypto = Config.TELEGRAM_CHAT_ID_CRYPTO or self.chat_id
+        self.chat_id_markets = Config.TELEGRAM_CHAT_ID_MARKETS or self.chat_id
+        self.chat_id_signals = Config.TELEGRAM_CHAT_ID_SIGNALS or self.chat_id
         
-        Args:
-            message: Mensaje a enviar (máximo 4096 caracteres)
-            parse_mode: Modo de parseo (HTML o Markdown)
+        # Grupos (prioridad sobre chat privado si existen)
+        self.group_crypto = Config.TELEGRAM_GROUP_CRYPTO
+        self.group_markets = Config.TELEGRAM_GROUP_MARKETS
+        self.group_signals = Config.TELEGRAM_GROUP_SIGNALS
+        
+        # Bot principal (Crypto)
+        self.token_crypto = Config.TELEGRAM_BOT_CRYPTO or Config.TELEGRAM_BOT_TOKEN
+        self.url_crypto = f"https://api.telegram.org/bot{self.token_crypto}"
+        
+        # Bot de Mercados
+        self.token_markets = Config.TELEGRAM_BOT_MARKETS
+        self.url_markets = f"https://api.telegram.org/bot{self.token_markets}" if self.token_markets else None
+        
+        # Bot de Señales
+        self.token_signals = Config.TELEGRAM_BOT_SIGNALS
+        self.url_signals = f"https://api.telegram.org/bot{self.token_signals}" if self.token_signals else None
+        
+        logger.info(f"✅ Servicio de Telegram inicializado (Chat ID: {self.chat_id})")
+        logger.info(f"   - Bot Crypto: {'✅' if self.token_crypto else '❌'}")
+        logger.info(f"   - Bot Markets: {'✅' if self.token_markets else '⚠️ (Usará Crypto)'}")
+        logger.info(f"   - Bot Signals: {'✅' if self.token_signals else '⚠️ (Usará Crypto)'}")
+    
+    def _send_to_url(self, message: str, base_url: str, parse_mode: str = "HTML") -> bool:
+        """Método interno para enviar a una URL específica"""
+        if not base_url:
+            logger.warning("⚠️ No hay URL configurada para este bot, usando default (Crypto)")
+            base_url = self.url_crypto
             
-        Returns:
-            True si se envió correctamente, False en caso contrario
-        """
         try:
-            # Telegram tiene límite de 4096 caracteres
             if len(message) > 4096:
                 logger.warning("⚠️ Mensaje muy largo, se truncará")
                 message = message[:4093] + "..."
             
-            url = f"{self.base_url}/sendMessage"
+            url = f"{base_url}/sendMessage"
             payload = {
-                'chat_id': self.chat_id,
+                'chat_id': self._resolve_chat_id(parse_mode),
                 'text': message,
                 'parse_mode': parse_mode,
                 'disable_web_page_preview': False
@@ -47,15 +63,91 @@ class TelegramService:
             response = requests.post(url, json=payload, timeout=10)
             
             if response.status_code == 200:
-                logger.info("✅ Mensaje enviado a Telegram")
                 return True
             else:
-                logger.error(f"❌ Error al enviar mensaje: {response.text}")
+                logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
                 return False
-                
         except Exception as e:
-            logger.error(f"❌ Error al enviar mensaje a Telegram: {e}")
+            logger.error(f"❌ Excepción Telegram: {e}")
             return False
+
+    def _resolve_chat_id(self, parse_mode: str = "HTML", bot_type: str = 'crypto') -> str:
+        """
+        Resuelve el ID del chat destino.
+        STRICT MODE: Solo devuelve grupos si están configurados.
+        """
+        if bot_type == 'markets':
+            if self.group_markets:
+                return self.group_markets
+            logger.warning("⚠️ TELEGRAM_GROUP_MARKETS no configurado. Se omite envío para evitar chat privado.")
+            return None
+            
+        if bot_type == 'signals':
+            if self.group_signals:
+                return self.group_signals
+            logger.warning("⚠️ TELEGRAM_GROUP_SIGNALS no configurado. Se omite envío para evitar chat privado.")
+            return None
+            
+        # Crypto (Default)
+        if self.group_crypto:
+            return self.group_crypto
+        logger.warning("⚠️ TELEGRAM_GROUP_CRYPTO no configurado. Se omite envío para evitar chat privado.")
+        return None
+
+    def send_message(self, message: str, parse_mode: str = "HTML", bot_type: str = 'crypto', chat_id: str = None) -> bool:
+        """
+        Envía mensaje al bot especificado.
+        bot_type: 'crypto', 'markets', 'signals'
+        """
+        target_url = self.url_crypto
+        if bot_type == 'markets' and self.url_markets:
+            target_url = self.url_markets
+        elif bot_type == 'signals' and self.url_signals:
+            target_url = self.url_signals
+            
+        # Resolver chat id por tipo (o usar el proporcionado)
+        target_chat_id = chat_id or self._resolve_chat_id(parse_mode, bot_type)
+        
+        if not target_chat_id:
+            logger.error(f"❌ No se pudo determinar un Target Group ID para {bot_type}. El envío ha sido bloqueado por seguridad (No Private Chat).")
+            return False
+        
+        try:
+            url = f"{target_url or self.url_crypto}/sendMessage"
+            payload = {
+                'chat_id': target_chat_id,
+                'text': message[:4093] + "..." if len(message) > 4096 else message,
+                'parse_mode': parse_mode,
+                'disable_web_page_preview': False
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                return True
+            else:
+                logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Excepción Telegram: {e}")
+            return False
+
+    def validate_private_access(self, chat_type: str, text: str, bot_type: str) -> bool:
+        try:
+            from services.telegram_security import validate_access
+            return validate_access(chat_type, text, bot_type)
+        except Exception:
+            return True
+
+    def send_crypto_message(self, message: str) -> bool:
+        """Envía mensaje al Bot de Crypto"""
+        return self.send_message(message, bot_type='crypto')
+
+    def send_market_message(self, message: str) -> bool:
+        """Envía mensaje al Bot de Mercados"""
+        return self.send_message(message, bot_type='markets')
+
+    def send_signal_message(self, message: str) -> bool:
+        """Envía mensaje al Bot de Señales"""
+        return self.send_message(message, bot_type='signals')
     
     def send_report(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: list, coins_both_enriched: list) -> bool:
         """
@@ -86,7 +178,7 @@ class TelegramService:
         """
         emoji = market_sentiment.get('sentiment_emoji', '📊')
         fear_greed = market_sentiment.get('fear_greed_index', {})
-        sentiment = market_sentiment.get('sentiment', 'N/A')
+        sentiment = market_sentiment.get('overall_sentiment', 'N/A')
         
         message = f"""<b>🚀 REPORTE CRIPTO - Análisis de Mercado</b>
 
@@ -119,7 +211,7 @@ class TelegramService:
         # Top 10 subidas y bajadas 2h (ambos exchanges)
         coins_up_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) > 0]
         coins_down_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) < 0]
-        message += "\n<b>⏱ Top 10 Criptomonedas que SUBIERON en 2h (Binance + Bybit):</b>\n"
+        message += "\n<b>⏱ Top 10 Criptomonedas que SUBIERON en 2h (Binance):</b>\n"
         for i, coin in enumerate(coins_up_2h[:10], 1):
             change_24h = coin.get('change_24h', 0)
             change_2h = coin.get('change_2h', None)
@@ -133,7 +225,7 @@ class TelegramService:
             else:
                 message += f"   ⏱ Cambio 2h: N/A\n"
 
-        message += "\n<b>⏱ Top 10 Criptomonedas que BAJARON en 2h (Binance + Bybit):</b>\n"
+        message += "\n<b>⏱ Top 10 Criptomonedas que BAJARON en 2h (Binance):</b>\n"
         for i, coin in enumerate(coins_down_2h[:10], 1):
             change_24h = coin.get('change_24h', 0)
             change_2h = coin.get('change_2h', None)
@@ -147,17 +239,32 @@ class TelegramService:
             else:
                 message += f"   ⏱ Cambio 2h: N/A\n"
         
-        # Recomendación de la IA
-        message += f"\n<b>🤖 Recomendación de IA:</b>\n"
-        recommendation = analysis.get('recommendation', '')
-        # Limpiar el texto de la recomendación
-        recommendation = recommendation.replace('**', '').replace('*', '').strip()
-        if recommendation and recommendation.lower() != 'n/a':
-            # Tomar solo la primera línea si hay múltiples líneas
-            first_line = recommendation.split('\n')[0].strip()
-            message += f"{first_line}\n"
+        # Recomendación de la IA (Top 3 Compras/Ventas si disponible)
+        top_buys = analysis.get('top_buys', [])
+        top_sells = analysis.get('top_sells', [])
+        if top_buys or top_sells:
+            message += f"\n<b>🤖 Recomendación de IA:</b>\n"
+            if top_buys:
+                message += "<b>🟢 Top 3 Compras:</b>\n"
+                for i, item in enumerate(top_buys[:3], 1):
+                    sym = item.get('symbol', 'N/A')
+                    reason = item.get('reason', '').strip()
+                    message += f"{i}. <b>{sym}</b> — {reason}\n"
+            if top_sells:
+                message += "<b>🔴 Top 3 Ventas:</b>\n"
+                for i, item in enumerate(top_sells[:3], 1):
+                    sym = item.get('symbol', 'N/A')
+                    reason = item.get('reason', '').strip()
+                    message += f"{i}. <b>{sym}</b> — {reason}\n"
         else:
-            message += "Análisis completado. Revisar oportunidades en el mercado.\n"
+            message += f"\n<b>🤖 Recomendación de IA:</b>\n"
+            recommendation = analysis.get('recommendation', '')
+            recommendation = recommendation.replace('**', '').replace('*', '').strip()
+            if recommendation and recommendation.lower() != 'n/a':
+                first_line = recommendation.split('\n')[0].strip()
+                message += f"{first_line}\n"
+            else:
+                message += "Análisis completado. Revisar oportunidades en el mercado.\n"
         
         # Nivel de confianza
         confidence = analysis.get('confidence_level', 0)

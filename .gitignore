@@ -51,6 +51,7 @@ desktop.ini
 utils/chrome-win64/
 chromedriver.exe
 *.crx
+chrome_profile/
 
 # Archivos de debug temporal
 *.html
@@ -59,6 +60,11 @@ utils/twitter_login_error_*
 
 # Datos temporales
 tweet_log.json
+last_publication.json
+news_history.json
+signals_history.json
+tweet_history.json
+contraseñasBOTS.json
 *.tmp
 *.temp
 *.bak

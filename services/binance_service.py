@@ -76,13 +76,15 @@ class BinanceService:
             # Ordenar por cambio porcentual (mayor a menor en valor absoluto)
             significant_coins.sort(key=lambda x: abs(x['change_24h']), reverse=True)
             
-            logger.info(f"🔍 Encontradas {len(significant_coins)} monedas con cambio ≥ {min_change_percent}%")
+            logger.info(f"🎯 Encontradas {len(significant_coins)} monedas con cambio ≥ {min_change_percent}%")
             
             # Mostrar las top 5
             if significant_coins:
-                logger.info("🏆 Top 5 monedas con mayor cambio:")
+                logger.info("🏅 Top 5 monedas con mayor cambio:")
                 for i, coin in enumerate(significant_coins[:5], 1):
-                    logger.info(f"   {i}. {coin['symbol']}: {coin['change_24h']:.2f}%")
+                    change = coin['change_24h']
+                    trend_emoji = "🔥" if change > 0 else "📉"
+                    logger.info(f"   {i}. {coin['symbol']}: {trend_emoji} {change:+.2f}%")
             
             return significant_coins
             
@@ -113,3 +115,52 @@ class BinanceService:
         except Exception as e:
             logger.error(f"❌ Error al obtener info de {symbol}: {e}")
             return {}
+    
+    def get_2hour_change(self, coins: List[Dict]) -> List[Dict]:
+        """
+        Calcula el cambio de precio de las últimas 2 horas para las monedas dadas.
+        Usa velas de 1 hora y compara las últimas 2 velas.
+        
+        Args:
+            coins: Lista de monedas con sus datos
+            
+        Returns:
+            Lista de monedas enriquecida con datos de cambio de 2h
+        """
+        logger.info(f"🔍 Consultando cambios de 2h en Binance para {len(coins)} monedas...")
+        enriched_coins = []
+        
+        for coin in coins:
+            try:
+                symbol = coin['symbol']
+                
+                # Obtener las últimas 3 velas de 1 hora (necesitamos 3 para calcular 2h de cambio)
+                ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=3)
+                
+                if len(ohlcv) >= 3:
+                    # ohlcv[0] = hace 2 horas, ohlcv[1] = hace 1 hora, ohlcv[2] = hora actual
+                    price_2h_ago = ohlcv[0][4]  # Precio de cierre hace 2 horas (índice 4 es close)
+                    current_price = ohlcv[2][4]  # Precio de cierre actual
+                    
+                    # Calcular cambio porcentual
+                    if price_2h_ago > 0:
+                        change_2h = ((current_price - price_2h_ago) / price_2h_ago) * 100
+                        
+                        # Agregar el dato de cambio de 2h a la moneda
+                        enriched_coin = coin.copy()
+                        enriched_coin['change_2h'] = change_2h
+                        enriched_coins.append(enriched_coin)
+                    else:
+                        # Si el precio hace 2h es 0, no podemos calcular
+                        enriched_coins.append(coin)
+                else:
+                    # Si no hay suficientes velas, agregar sin cambio de 2h
+                    enriched_coins.append(coin)
+                    
+            except Exception as e:
+                logger.debug(f"⚠️ No se pudo obtener cambio de 2h para {coin.get('symbol', 'N/A')}: {e}")
+                # Agregar la moneda sin datos de 2h
+                enriched_coins.append(coin)
+        
+        logger.info(f"   ✅ Datos de 2h enriquecidos para {len(enriched_coins)} monedas")
+        return enriched_coins
