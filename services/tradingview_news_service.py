@@ -9,6 +9,7 @@ import subprocess
 import shutil
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 import tempfile
+import requests
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -261,34 +262,85 @@ class TradingViewNewsService:
         else:
             logger.info("✅ Ninguna noticia superó el umbral de relevancia (7/10)")
 
+    def _extract_keywords(self, title: str) -> list:
+        """Extrae símbolos/tickers del título"""
+        tickers = re.findall(r'\b[A-Z]{2,5}\b', title)
+        return tickers[:3]
+
+    def _fetch_yahoo_finance_image(self, title: str, summary: str) -> Optional[str]:
+        """Busca imagen en Yahoo Finance"""
+        try:
+            keywords = self._extract_keywords(title)
+            search_url = f"https://finance.yahoo.com/quote/{keywords[0]}" if keywords else None
+            
+            if search_url:
+                response = requests.get(search_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+                if response.status_code == 200:
+                    match = re.search(r'<meta property="og:image" content="([^"]+)"', response.text)
+                    if match:
+                        return match.group(1)
+            return None
+        except Exception:
+            return None
+
+    def _format_professional_news_message(self, news_item: dict, has_image: bool) -> str:
+        """Formatea mensaje profesional"""
+        category = news_item.get('analysis', {}).get('category', 'crypto')
+        title = news_item.get('title', '')
+        summary = news_item.get('analysis', {}).get('summary', '')
+        score = news_item.get('analysis', {}).get('score', 0)
+        
+        emoji_map = {'crypto': '🪙', 'markets': '📈', 'signals': '🎯'}
+        emoji = emoji_map.get(category, '📰')
+        relevance = "⭐" * min(score, 10)
+        
+        return f"""{emoji} **NOTICIA {category.upper()}**
+
+📌 **{title}**
+
+{summary}
+
+{'📊 Relevancia: ' + relevance + f' ({score}/10)' if score > 0 else ''}
+
+🔗 Fuente: TradingView"""
+
     def _publish_news(self, news_list: List[Dict], dry_run: bool = False):
         """Publica las noticias filtradas"""
         
         for news in news_list:
             title = news['title']
-            url = news['url']
-            score = news['analysis']['score']
-            summary = news['analysis']['summary']
-            # Obtener categoría del análisis batch, o default a crypto
-            category = news['analysis'].get('category', 'crypto')
+            # Obtener categoría del análisis batch
+            category = news['analysis'].get('category', 'crypto').lower()
             
-            # Mensaje
-            message = f"🔥 NOTICIA IMPORTANTE\n\n"
-            message += f"{title}\n\n"
-            message += f"📊 Relevancia: {score}/10\n"
-            message += f"📝 {summary}\n"
-            message += f"🔗 {url}"
+            # Buscar imagen
+            image_url = self._fetch_yahoo_finance_image(title, news['analysis'].get('summary', ''))
             
-            # Telegram con clasificación IA -> bot correcto
+            # Mensaje profesional
+            message = self._format_professional_news_message(news, bool(image_url))
+            
             if self.telegram and not dry_run:
                 try:
-                    def send_telegram() -> None:
-                        if category == 'markets':
-                            self.telegram.send_message(message, bot_type='markets')
-                        elif category == 'signals':
-                            self.telegram.send_message(message, bot_type='signals')
+                    # Determinar grupo destino usando Config
+                    target_group = None
+                    if category == 'signals':
+                        target_group = Config.TELEGRAM_GROUP_SIGNALS
+                    elif category == 'markets':
+                        target_group = Config.TELEGRAM_GROUP_MARKETS
+                    else:
+                        target_group = Config.TELEGRAM_GROUP_CRYPTO
+                        
+                    def send_telegram():
+                        if target_group:
+                            self.telegram.send_to_specific_group(message, target_group, image_url=image_url)
                         else:
-                            self.telegram.send_message(message, bot_type='crypto')
+                            # Fallback
+                            if category == 'markets':
+                                self.telegram.send_market_message(message, image_url=image_url)
+                            elif category == 'signals':
+                                self.telegram.send_signal_message(message, image_url=image_url)
+                            else:
+                                self.telegram.send_crypto_message(message, image_url=image_url)
+                                
                     self._retry(send_telegram)
                 except Exception as e:
                     logger.error(f"❌ Error enviando a Telegram: {e}")
@@ -296,9 +348,14 @@ class TradingViewNewsService:
             # Twitter
             if self.twitter and not dry_run:
                 try:
-                    self._retry(lambda: self.twitter.post_tweet(message, category='news'))
+                    tweet_text = f"{'🪙' if category=='crypto' else '📈'} {title[:100]}...\n\n"
+                    tweet_text += f"{news['analysis'].get('summary', '')[:100]}...\n\n"
+                    tweet_text += f"🔗 {news['url']}\n"
+                    tweet_text += f"#Trading #News #{category}"
+                    
+                    self._retry(lambda: self.twitter.post_tweet(tweet_text[:280], image_path=image_url))
                 except Exception as e:
-                    logger.error(f"❌ Error publicando en Twitter (degradado): {e}")
+                    logger.error(f"❌ Error publicando en Twitter: {e}")
                 
             logger.info(f"✅ Publicada noticia: {title} ({category})")
             

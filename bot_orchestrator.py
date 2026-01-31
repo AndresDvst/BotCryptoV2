@@ -98,7 +98,7 @@ class CryptoBotOrchestrator:
         self._init_service("twitter", TwitterService, critical=False)
         self._init_service("db", MySQLManager, critical=False)
         self._init_service("technical_analysis", TechnicalAnalysisService, critical=False)
-        self._init_service("traditional_markets", lambda: TraditionalMarketsService(self._services.get("telegram"), self._services.get("twitter")), critical=False)
+        self._init_service("traditional_markets", lambda: TraditionalMarketsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
         self._init_service("price_monitor", lambda: PriceMonitorService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter")), critical=False)
         self._init_service("news_service", lambda: NewsService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
         self._init_service("tradingview_news", lambda: TradingViewNewsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
@@ -190,21 +190,47 @@ class CryptoBotOrchestrator:
             market_data = None
             if self.market_sentiment:
                 market_data = self.market_sentiment.analyze_market_sentiment()
-        with perf.step("ai_analysis"):
-            ai_analysis = self.ai_analyzer.analyze_and_recommend(coins_enriched, market_data)
-        with perf.step("ai_twitter_summaries"):
-            twitter_summaries = self.ai_analyzer.generate_twitter_4_summaries(market_data, significant_coins, coins_enriched, max_chars=280)
+                
+        # --- NUEVO: ANÁLISIS BATCH (Todo en una llamada) ---
+        with perf.step("ai_batch_analysis"):
+            # Obtener noticias top para el contexto
+            news_titles = []
+            if self.news_service:
+                 # Hack: traer ultimas noticias de DB o memoria si es posible
+                 # Por simplicidad, pasamos lista vacía o implementamos get_recent_titles en news_service luego
+                 pass
+            
+            # Llamada optimizada
+            batch_result = self.ai_analyzer.analyze_complete_market_batch(
+                coins=coins_enriched,
+                market_sentiment=market_data,
+                news_titles=news_titles
+            )
+            
         summary = perf.summary()
         logger.info("⏱ Performance por paso:")
         for name, elapsed in summary:
             logger.info(f"{name}: {elapsed:.2f}s")
+            
         return {
             "significant_coins": significant_coins,
             "coins_enriched": coins_enriched,
             "technical_signals": technical_signals,
             "market_data": market_data,
-            "ai_analysis": ai_analysis,
-            "twitter_summaries": twitter_summaries,
+            # Mapear resultado batch a estructura esperada
+            "ai_analysis": {
+                "full_analysis": batch_result['market_analysis'].get('overview', ''),
+                "recommendation": batch_result['trading_summary'].get('main_recommendation', ''),
+                "confidence_level": batch_result['trading_summary'].get('confidence', 0),
+                "top_buys": batch_result['crypto_recommendations'].get('top_buys', []),
+                "top_sells": batch_result['crypto_recommendations'].get('top_sells', []),
+            },
+            # Generar tweets localmente con funcion existing o usar logic nueva?
+            # Por consistencia, usamos la funcion de AI service que ya teniamos para generar los 4 tweets
+            # usando los datos enriquecidos localmente, ya que el batch analysis no retorna tweets formateados.
+            "twitter_summaries": self.ai_analyzer.generate_twitter_4_summaries(
+                market_data, significant_coins, coins_enriched, max_chars=280
+            ),
         }
 
     def _publish_twitter_batch(self, summaries: Dict[str, str], delay_seconds: int = 30) -> Dict[str, bool]:
@@ -281,6 +307,35 @@ class CryptoBotOrchestrator:
                         self.tradingview_news.publish_morning_report(self.telegram, self.twitter)
                     except Exception:
                         pass
+                
+                # --- ANÁLISIS DE MERCADOS TRADICIONALES (3 veces al día) ---
+                if self.traditional_markets:
+                    current_hour = datetime.now().hour
+                    # Ejecutar a las 8 (mañana), 14 (tarde), 20 (noche) aprox.
+                    # Se usa un rango pequeño para asegurar ejecución
+                    target_hours = [8, 14, 20]
+                    # Solo si estamos en la hora target y no se ha ejecutado recientemente (cooldown simple)
+                    should_run_signals = any(h == current_hour for h in target_hours)
+                    
+                    # Ejecutar siempre el resumen general (movers), pero signals solo en horas clave
+                    try:
+                        self.traditional_markets.run_traditional_markets_analysis(publish=True, get_signals=should_run_signals)
+                    except Exception as e:
+                       logger.error(f"❌ Error en análisis tradicional: {e}")
+
+                # --- NOTICIAS ---
+                if self.news_service:
+                    try:
+                        self.news_service.publish_news()
+                    except Exception as e:
+                        logger.error(f"❌ Error en ciclo de noticias: {e}")
+
+                if self.tradingview_news and not is_morning: # Evitar duplicar con reporte matutino
+                     try:
+                        self.tradingview_news.run_news_cycle()
+                     except Exception as e:
+                        logger.error(f"❌ Error en ciclo de noticias TradingView: {e}")
+
                 if dry_run:
                     logger.info("🧪 Dry-run activo, no se publica")
                     return True

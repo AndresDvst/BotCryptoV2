@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from config.config import Config
 from utils.logger import logger
+from .telegram_templates import TelegramMessageTemplates
 
 class TelegramService:
     """Servicio para enviar mensajes a Telegram"""
@@ -273,8 +274,79 @@ class TelegramService:
             return self.send_photo(image_path, caption=message, bot_type='markets')
         return self.send_message(message, bot_type='markets')
 
-    def send_signal_message(self, message: str, image_path: Optional[str] = None) -> bool:
-        """Envía mensaje al Bot de Señales"""
+    def send_news_message(self, news: dict, image_path: Optional[str] = None) -> bool:
+        """Envía noticia usando plantilla profesional"""
+        try:
+            message = TelegramMessageTemplates.format_news(news)
+            
+            # Determinar grupo según categoría
+            category = news.get('category', 'crypto').lower()
+            if category == 'markets':
+                group = self.group_markets or Config.TELEGRAM_GROUP_MARKETS
+            elif category == 'signals':
+                group = self.group_signals or Config.TELEGRAM_GROUP_SIGNALS
+            else:
+                group = self.group_crypto or Config.TELEGRAM_GROUP_CRYPTO
+
+            message = message.replace("**", "*") # Fix markdown
+
+            return self.send_to_specific_group(message, group, image_path=image_path, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"❌ Error enviando noticia: {e}")
+            return False
+
+    def send_market_analysis(self, analysis: dict, sentiment: dict, image_path: Optional[str] = None) -> bool:
+        """Envía análisis usando plantilla profesional"""
+        try:
+            message = TelegramMessageTemplates.format_market_analysis(analysis, sentiment)
+            # Fix bold
+            message = message.replace("**", "*")
+            
+            return self.send_to_specific_group(message, self.group_crypto, image_path=image_path, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"❌ Error enviando análisis de mercado: {e}")
+            return False
+
+    def send_to_specific_group(self, message: str, group_id: str, image_path: Optional[str] = None, parse_mode: str = 'Markdown') -> bool:
+        """Helper para enviar a grupo especifico con lógica de imagen"""
+        if not group_id:
+            # Fallback a crypto bot default
+            return self.send_message(message, parse_mode=parse_mode, bot_type='crypto')
+            
+        bot_type = 'crypto'
+        if group_id == self.group_markets: bot_type = 'markets'
+        elif group_id == self.group_signals: bot_type = 'signals'
+        
+        if image_path:
+             return self.send_photo(image_path, caption=message, parse_mode=parse_mode, bot_type=bot_type, chat_id=group_id)
+        return self.send_message(message, parse_mode=parse_mode, bot_type=bot_type, chat_id=group_id)
+
+    def send_signal_message(self, signals_data: Any, image_path: Optional[str] = None) -> bool:
+        """Envía señales (acepta dict con listas o str simple)"""
+        # Si es string, comportamiento legacy
+        if isinstance(signals_data, str):
+             return self._legacy_send_signal_message(signals_data, image_path)
+        
+        try:
+            longs = signals_data.get('top_longs', [])
+            shorts = signals_data.get('top_shorts', [])
+            
+            # Usar plantilla profesional
+            message = TelegramMessageTemplates.format_signals_batch(longs, shorts)
+            message = message.replace("**", "*") # Fix markdown
+            
+            return self.send_to_specific_group(
+                message, 
+                Config.TELEGRAM_GROUP_SIGNALS or self.group_signals,
+                image_path=image_path,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"❌ Error enviando señales template: {e}")
+            return False
+
+    def _legacy_send_signal_message(self, message: str, image_path: Optional[str] = None) -> bool:
+        """Envía mensaje al Bot de Señales (Legacy)"""
         if image_path is None:
             image_path = Config.SIGNALS_IMAGE_PATH
         if image_path:

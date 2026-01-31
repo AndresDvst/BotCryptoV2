@@ -196,23 +196,37 @@ class AIAnalyzerService:
         self._metrics["total_time"][provider] += elapsed
         return str(result)
 
-    def _call_with_fallback(self, prompt: str, max_tokens: int = 2048) -> Tuple[str, Optional[str]]:
+    def _call_with_fallback_robust(self, prompt: str, max_tokens: int = 2048) -> Tuple[str, Optional[str]]:
+        """
+        Intenta obtener respuesta de multiples proveedores con fallback.
+        """
         providers = self._get_provider_priority_list()
         if not providers:
-            return "", None
+            logger.error("❌ No hay proveedores de IA configurados/disponibles")
+            return "Error: Sin proveedores de IA", None
 
         last_error: Optional[Exception] = None
+        
         for provider in providers:
             try:
+                logger.info(f"🤖 Intentando con {provider}...")
                 text = self._call_provider(provider, prompt, max_tokens=max_tokens)
+                
+                if not text or len(text.strip()) < 5:
+                    raise RuntimeError("Respuesta vacía o muy corta")
+                    
                 self._cycle_provider_ok = True
+                logger.info(f"✅ Éxito con {provider}")
                 return text, provider
+                
             except Exception as e:
                 last_error = e
-                if not self._is_quota_error(e):
-                    logger.debug("Fallo generando contenido")
+                logger.warning(f"⚠️ Falló {provider}: {str(e)}")
+                if self._is_quota_error(e):
+                    logger.warning(f"⏳ Quota excedida en {provider}")
 
-        return "", None
+        logger.error("❌ Todos los proveedores de IA fallaron")
+        return "Error: Todos los proveedores fallaron. Revise logs.", None
 
     def reset_cycle_status(self) -> None:
         self._cycle_provider_ok = False
@@ -298,7 +312,7 @@ class AIAnalyzerService:
         self.active_provider = None
 
     def _generate_content(self, prompt: str, max_tokens: int = 2048) -> str:
-        text, _ = self._call_with_fallback(prompt, max_tokens=max_tokens)
+        text, _ = self._call_with_fallback_robust(prompt, max_tokens=max_tokens)
         return text
 
     def _simplify_coins(self, coins: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -485,10 +499,23 @@ Por favor, proporciona:
 
 Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto más amigable."""
         try:
-            ai_analysis, _provider = self._call_with_fallback(prompt, max_tokens=2048)
-            logger.debug("Análisis de IA completado")
+            ai_analysis, provider = self._call_with_fallback_robust(prompt, max_tokens=2048)
+            
+            if not provider:
+                 logger.error("❌ Fallo en análisis IA - ningun proveedor respondió")
+                 return {
+                    "full_analysis": "⚠️ **ERROR DE IA**\n\nNo se pudo conectar con ningún proveedor de inteligencia artificial (Gemini/OpenAI/Neural). Por favor intente más tarde.",
+                    "recommendation": "Sin recomendación (Fallo de IA)",
+                    "confidence_level": 0,
+                    "ai_status": "FAILED"
+                }
+
+            logger.info(f"✅ Análisis de IA completado con {provider}")
+            
             result: Dict[str, Any] = {
                 "full_analysis": ai_analysis,
+                "dataset_provider": provider,
+                "ai_status": "ONLINE",
                 "market_overview": self._extract_section(ai_analysis, 1),
                 "top_coins_analysis": self._extract_section(ai_analysis, 2),
                 "recommendation": self._extract_section(ai_analysis, 3),
@@ -516,7 +543,7 @@ Monedas: {json.dumps(simplified_coins, ensure_ascii=False)}
 Sentimiento: {json.dumps(market_sentiment, ensure_ascii=False)}
 Responde SOLO el JSON."""
             try:
-                jr_text, _ = self._call_with_fallback(json_prompt, max_tokens=512)
+                jr_text, _ = self._call_with_fallback_robust(json_prompt, max_tokens=512)
                 parsed = self._extract_json_safe(jr_text, expect="object")
                 if isinstance(parsed, dict):
                     result["top_buys"] = parsed.get("top_buys", [])
@@ -625,6 +652,144 @@ Responde SOLO el JSON."""
                 logger.debug("Error al generar tweet")
             return {"up": "📊 Análisis de mercado cripto actualizado.", "down": "📊 Análisis de mercado cripto actualizado."}
     
+    def analyze_complete_market_batch(self, coins: list, market_sentiment: dict, 
+                                       news_titles: list = None) -> dict:
+        """
+        Analiza TODO en un solo lote para minimizar llamadas a IA.
+        """
+        logger.info("🤖 Ejecutando análisis BATCH completo con IA")
+        logger.info(f"   📊 {len(coins)} monedas, {len(news_titles or [])} noticias")
+        
+        # Simplificar datos para reducir tokens
+        simplified_coins = self._simplify_coins(coins)
+        simplified_sentiment = {
+            'fear_greed': market_sentiment.get('fear_greed_index', {}).get('value', 50),
+            'sentiment': market_sentiment.get('overall_sentiment', 'Neutral'),
+            'trend': market_sentiment.get('market_trend', 'Lateral')
+        }
+        
+        # Construir mega-prompt con TODO
+        mega_prompt = f"""Eres un analista experto de mercados financieros y criptomonedas.
+
+Analiza TODOS los siguientes datos en un solo análisis y devuelve un JSON estructurado con TODO.
+
+═══════════════════════════════════════════════════════
+📊 DATOS DEL MERCADO:
+{json.dumps(simplified_sentiment, ensure_ascii=False)}
+
+🪙 CRIPTOMONEDAS (Top cambios 24h):
+{json.dumps(simplified_coins[:20], ensure_ascii=False)}  # Max 20 para evitar exceder tokens
+
+📰 NOTICIAS RECIENTES:
+{json.dumps(news_titles[:30] if news_titles else [], ensure_ascii=False)}  # Max 30
+═══════════════════════════════════════════════════════
+
+RESPONDE EN UN SOLO JSON CON ESTA ESTRUCTURA EXACTA:
+
+{{
+  "market_analysis": {{
+    "overview": "<2-3 líneas sobre estado general del mercado>",
+    "sentiment_interpretation": "<qué significa el Fear & Greed actual>",
+    "key_trends": ["<tendencia 1>", "<tendencia 2>", "<tendencia 3>"]
+  }},
+  
+  "crypto_recommendations": {{
+    "top_buys": [
+      {{"symbol": "BTC", "reason": "<razón breve>", "confidence": 1-10}},
+      {{"symbol": "ETH", "reason": "<razón breve>", "confidence": 1-10}},
+      {{"symbol": "...", "reason": "<razón breve>", "confidence": 1-10}}
+    ],
+    "top_sells": [
+      {{"symbol": "...", "reason": "<razón breve>", "confidence": 1-10}},
+      {{"symbol": "...", "reason": "<razón breve>", "confidence": 1-10}}
+    ],
+    "overall_confidence": 1-10
+  }},
+  
+  "news_analysis": [
+    {{
+      "index": <índice original en lista>,
+      "score": 6-10,
+      "summary": "<resumen 1 línea>",
+      "category": "crypto|markets|signals"
+    }},
+    ...
+  ],
+  
+  "trading_summary": {{
+    "main_recommendation": "<recomendación principal en 3-4 líneas>",
+    "risk_level": "bajo|medio|alto",
+    "confidence": 1-10,
+    "warnings": ["<advertencia 1>", "<advertencia 2>"]
+  }}
+}}
+
+IMPORTANTE:
+- Responde SOLO el JSON, sin texto adicional
+- Usa análisis objetivo basado en datos
+- Sé conciso pero preciso
+- Incluye TODOS los análisis en esta única respuesta
+"""
+        
+        try:
+            # UNA SOLA LLAMADA a IA
+            response_text, provider_used = self._call_with_fallback_robust(
+                mega_prompt, 
+                max_tokens=4096  # Aumentar tokens para respuesta completa
+            )
+            
+            logger.info(f"✅ Análisis batch completado usando: {provider_used}")
+            logger.info(f"   📏 Respuesta: {len(response_text)} caracteres")
+            
+            # Parsear JSON
+            parsed = self._extract_json_safe(response_text, expect="object")
+            
+            if not isinstance(parsed, dict):
+                logger.error("❌ IA no retornó JSON válido")
+                return self._generate_fallback_analysis()
+            
+            # Desglosar en estructura legible
+            result = {
+                'market_analysis': parsed.get('market_analysis', {}),
+                'crypto_recommendations': parsed.get('crypto_recommendations', {}),
+                'news_analysis': parsed.get('news_analysis', []),
+                'trading_summary': parsed.get('trading_summary', {}),
+                'raw_response': response_text,
+                'provider_used': provider_used
+            }
+            
+            logger.info("✅ Análisis batch desglosado correctamente")
+            logger.info(f"   📰 {len(result['news_analysis'])} noticias analizadas")
+            logger.info(f"   🎯 Confianza general: {result['trading_summary'].get('confidence', 0)}/10")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error en análisis batch: {e}")
+            return self._generate_fallback_analysis()
+
+    def _generate_fallback_analysis(self) -> dict:
+        """Genera análisis fallback cuando IA falla"""
+        return {
+            'market_analysis': {
+                'overview': 'Análisis no disponible temporalmente',
+                'sentiment_interpretation': 'Servicio de IA en mantenimiento',
+                'key_trends': []
+            },
+            'crypto_recommendations': {
+                'top_buys': [],
+                'top_sells': [],
+                'overall_confidence': 0
+            },
+            'news_analysis': [],
+            'trading_summary': {
+                'main_recommendation': 'No se pudo generar recomendación automática. Revisa datos manualmente.',
+                'risk_level': 'alto',
+                'confidence': 0,
+                'warnings': ['Servicio de IA temporalmente no disponible']
+            }
+        }
+    
     def analyze_news_batch(self, news_titles: List[str]) -> List[Dict]:
         """
         Analiza un lote de noticias y selecciona las más importantes.
@@ -660,7 +825,7 @@ FORMATO DE RESPUESTA JSON (Lista de objetos):
 ]
 """
         try:
-            text, _ = self._call_with_fallback(prompt, max_tokens=1024)
+            text, _ = self._call_with_fallback_robust(prompt, max_tokens=1024)
             if not text:
                 return []
 
@@ -708,7 +873,7 @@ Criterios:
 - 1-3: Noticia poco relevante
 - 0: Spam o irrelevante"""
 
-            result_text, _ = self._call_with_fallback(prompt, max_tokens=512)
+            result_text, _ = self._call_with_fallback_robust(prompt, max_tokens=512)
             if not result_text:
                 return {"score": 5, "summary": text[:100]}
 
@@ -756,7 +921,7 @@ Responde SOLO con JSON:
   "category": "<crypto|markets|signals>",
   "confidence": <entero 0-10>
 }}"""
-            result_text, _ = self._call_with_fallback(prompt, max_tokens=512)
+            result_text, _ = self._call_with_fallback_robust(prompt, max_tokens=512)
             if not result_text:
                 return {"category": "crypto", "confidence": 5}
 

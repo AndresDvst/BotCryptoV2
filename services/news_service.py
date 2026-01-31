@@ -14,6 +14,9 @@ from services.ai_analyzer_service import AIAnalyzerService
 from services.telegram_service import TelegramService
 from services.twitter_service import TwitterService
 from database.mysql_manager import MySQLManager
+from config.config import Config
+import re
+import os
 
 
 class NewsService:
@@ -279,7 +282,140 @@ class NewsService:
         except Exception as e:
             logger.warning(f"⚠️ Error filtrando noticia: {e}")
             return None
-    
+            
+    def _extract_keywords(self, title: str) -> list:
+        """Extrae símbolos/tickers del título"""
+        # Buscar tickers: BTC, ETH, AAPL, etc.
+        tickers = re.findall(r'\b[A-Z]{2,5}\b', title)
+        return tickers[:3]  # Max 3
+
+    def _fetch_yahoo_finance_image(self, title: str, summary: str) -> Optional[str]:
+        """
+        Busca imagen relacionada con la noticia en Yahoo Finance.
+        Si no encuentra, retorna None.
+        """
+        try:
+            # Extraer símbolos/keywords del título
+            keywords = self._extract_keywords(title)
+            
+            # Buscar en Yahoo Finance
+            search_url = f"https://finance.yahoo.com/quote/{keywords[0]}" if keywords else None
+            
+            if search_url:
+                response = requests.get(search_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+                if response.status_code == 200:
+                    # Búsqueda simple de og:image en el HTML
+                    # No usamos BeautifulSoup completo para evitar dependencia pesada si no está,
+                    # pero si está disponible mejor. Aquí usaremos regex simple.
+                    match = re.search(r'<meta property="og:image" content="([^"]+)"', response.text)
+                    if match:
+                        img_url = match.group(1)
+                        logger.info(f"✅ Imagen encontrada en Yahoo Finance: {keywords[0]}")
+                        return img_url
+            
+            logger.info("ℹ️ No se encontró imagen en Yahoo Finance")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"⚠️ Error buscando imagen: {e}")
+            return None
+
+    def _download_yahoo_finance_image(self, image_url: str, title: str) -> Optional[str]:
+        """Descarga la imagen de alta calidad"""
+        try:
+            if not image_url:
+                return None
+                
+            response = requests.get(image_url, stream=True, timeout=10)
+            if response.status_code == 200:
+                # Sanitizar nombre
+                safe_title = re.sub(r'[^a-zA-Z0-9]', '_', title)[:50]
+                hash_name = hashlib.md5(title.encode()).hexdigest()[:8]
+                filename = f"news_img_{safe_title}_{hash_name}.jpg"
+                path = os.path.join(Config.TEMP_DIR or "temp", filename)
+                
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+                with open(path, 'wb') as f:
+                    for chunk in response.iter_content(1024):
+                        f.write(chunk)
+                
+                logger.info(f"✅ Imagen descargada: {path}")
+                return path
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Error descargando imagen: {e}")
+            return None
+
+    def _fetch_yahoo_finance_image_enhanced(self, title: str) -> Optional[str]:
+        """Wrapper que busca y descarga la imagen"""
+        img_url = self._fetch_yahoo_finance_image(title, "") # Reuse existing logic
+        if img_url:
+             # Yahoo a veces da miniaturas, intentar obtener versión HQ si es posible
+             # Por ahora descargamos lo que hay
+             return self._download_yahoo_finance_image(img_url, title)
+        return None
+
+    def _format_professional_news_message(self, news: dict, has_image: bool) -> str:
+        """Formatea mensaje de noticia de forma profesional y atractiva"""
+        category = news.get('category', 'crypto')
+        title = news.get('title', '')
+        summary = news.get('summary', '')
+        score = news.get('relevance_score', 0)
+        
+        # Emoji según categoría
+        if category == 'crypto':
+            emoji_header = "🪙"
+        elif category == 'markets':
+            emoji_header = "📈"
+        elif category == 'signals':
+            emoji_header = "🎯"
+        else:
+            emoji_header = "📰"
+        
+        # Relevancia visual
+        relevance_stars = "⭐" * min(score, 10)
+        
+        # Mapeo de fuente
+        source = news.get('source', 'Web')
+        if source == 'Google News':
+             source = 'Google News / ' + news.get('url', '')[:20] + '...'
+        
+        message = f"""{emoji_header} **NOTICIA {category.upper()}**
+
+📌 **{title}**
+
+{summary}
+
+{'📊 Relevancia: ' + relevance_stars + f' ({score}/10)' if score > 0 else ''}
+
+🔗 Fuente: {source}"""
+        
+        return message.strip()
+
+    def _format_twitter_news(self, news: dict) -> str:
+        """Formatea para Twitter (max 280 chars) de forma atractiva"""
+        category = news.get('category', 'crypto')
+        title = news.get('title', '')
+        score = news.get('relevance_score', 0)
+        
+        emoji = "🪙" if category == 'crypto' else "📈" if category == 'markets' else "📰"
+        
+        # Título truncado inteligente
+        max_title = 200
+        if len(title) > max_title:
+            title = title[:max_title] + "..."
+        
+        tweet = f"{emoji} {title}\n\n"
+        
+        # Relevancia
+        if score >= 8:
+            tweet += "⚡ Alta relevancia\n"
+        
+        tweet += f"📍 Fuente: {news.get('source', 'Web')}"
+        
+        return tweet[:280]
+
     def publish_news(self, news: Dict):
         """
         Publica noticia en Twitter y Telegram.
@@ -288,58 +424,52 @@ class NewsService:
             news: Diccionario con datos de la noticia
         """
         try:
-            # Emojis por categoría
-            emoji_map = {
-                'crypto': '🪙',
-                'bitcoin': '₿',
-                'ethereum': '⟠',
-                'stocks': '📈',
-                'forex': '💱',
-                'general': '📰'
-            }
+            # 0. Buscar imagen (Enhanced)
+            image_path = self._fetch_yahoo_finance_image_enhanced(news['title'])
             
-            emoji = emoji_map.get(news['category'], '📰')
-            score = news.get('relevance_score', 0)
+            # 1. Publicar en Twitter (usando path local)
+            if self.twitter:
+                logger.info("📝 Publicando en Twitter...")
+                tweet_text = self._format_twitter_news(news)
+                self.twitter.post_tweet(tweet_text, image_path=image_path)
+                news['published_twitter'] = True
             
-            # Tweet
-            tweet_text = f"{emoji} NOTICIA IMPORTANTE\n\n"
-            tweet_text += f"{news['title']}\n\n"
-            
-            # Acortar URL si es muy larga
-            url = news['url']
-            if len(url) > 100:
-                url = url[:100] + "..."
-            
-            tweet_text += f"🔗 {url}\n\n"
-            tweet_text += f"⭐ Relevancia: {score}/10\n"
-            tweet_text += f"#Crypto #News #{news['category'].capitalize()}"
-            
-            # Limitar a 280 caracteres
-            if len(tweet_text) > 280:
-                tweet_text = tweet_text[:277] + "..."
-            
-            logger.info("📝 Publicando en Twitter...")
-            self.twitter.post_tweet(tweet_text)
-            news['published_twitter'] = True
-            
-            # Telegram con enrutamiento por categoría usando IA
-            telegram_text = f"{emoji} <b>NOTICIA IMPORTANTE</b>\n\n"
-            telegram_text += f"<b>{news['title']}</b>\n\n"
-            telegram_text += f"🔗 <a href='{news['url']}'>Leer más</a>\n\n"
-            telegram_text += f"⭐ Relevancia: {score}/10\n"
-            telegram_text += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            classification = self.ai_analyzer.classify_news_category(news['title'], news.get('summary', ''))
-            category = classification.get('category', news.get('category', 'crypto'))
-            logger.info(f"📬 Clasificación IA: {category} (confianza {classification.get('confidence', 0)}/10)")
-            
-            if category == 'markets':
-                self.telegram.send_market_message(telegram_text)
-            elif category == 'signals':
-                self.telegram.send_signal_message(telegram_text)
-            else:
-                self.telegram.send_crypto_message(telegram_text)
-            news['published_telegram'] = True
+            # 2. Publicar en Telegram con routing
+            if self.telegram:
+                # Clasificar categoría si no viene definida
+                if news.get('category') == 'general' or not news.get('category'):
+                    classification = self.ai_analyzer.classify_news_category(news['title'], news.get('summary', ''))
+                    category = classification.get('category', 'crypto').lower()
+                    news['category'] = category
+                    logger.info(f"� Clasificación IA: {category} (confianza {classification.get('confidence', 0)}/10)")
+                
+                category = news.get('category', 'crypto').lower()
+                
+                # Definir grupo destino
+                target_group = None
+                if category == 'signals':
+                    target_group = Config.TELEGRAM_GROUP_SIGNALS
+                elif category == 'markets' or category == 'stocks' or category == 'forex':
+                     target_group = Config.TELEGRAM_GROUP_MARKETS
+                else: # crypto, bitcoin, ethereum
+                     target_group = Config.TELEGRAM_GROUP_CRYPTO
+                
+                # Mensaje profesional
+                telegram_text = self._format_professional_news_message(news, has_image=bool(image_url))
+                
+                # Enviar
+                if target_group:
+                    self.telegram.send_to_specific_group(telegram_text, target_group, image_path=image_path)
+                else:
+                    # Fallback a lógica antigua si no hay grupo específico
+                    if category == 'markets':
+                        self.telegram.send_market_message(telegram_text, image_path=image_path)
+                    elif category == 'signals':
+                        self.telegram.send_signal_message(telegram_text, image_path=image_path)
+                    else:
+                        self.telegram.send_crypto_message(telegram_text, image_path=image_path)
+                
+                news['published_telegram'] = True
             
             # Guardar en DB
             self.save_news(news)

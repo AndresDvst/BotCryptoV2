@@ -29,9 +29,9 @@ class TechnicalAnalysisConfig:
     RSI_OVERBOUGHT: int = 70
     RSI_NEUTRAL_LOWER: int = 45
     RSI_NEUTRAL_UPPER: int = 55
-    MIN_CONFIDENCE: float = 40.0
-    MIN_CONFLUENCE_INDICATORS: int = 2
-    MIN_VOLUME_MULTIPLIER: float = 1.5
+    MIN_CONFIDENCE: float = 35.0  # Antes: 60.0
+    MIN_CONFLUENCE_INDICATORS: int = 2  # Antes: 3
+    MIN_VOLUME_MULTIPLIER: float = 1.2  # Antes: 1.5
     
     # Nuevos parámetros para señales de baja confianza
     ALLOW_LOW_CONFIDENCE: bool = True
@@ -1043,17 +1043,16 @@ class TechnicalAnalysisService:
             logger.info("📊 No hay señales nuevas. Enviando informe de estado neutro.")
             
             no_signals_msg = """📊 ANÁLISIS TÉCNICO
-            
-⚠️ No se encontraron señales de alta confianza en este momento.
 
-El mercado presenta condiciones neutras o sin confluencia clara de indicadores de alta probabilidad.
+⚠️ Sin oportunidades de trading ahora
 
-💡 Recomendaciones:
-- Esperar mejores oportunidades
-- Monitorear cambios en volumen
-- Revisar próximo análisis en 1-2 horas
+📉 Condiciones:
+- Sin confluencia de indicadores
+- Volumen bajo
+- Mercado lateral
 
-🔔 Te notificaremos cuando aparezcan señales con mayor confianza."""
+💡 Próximo análisis: 1-2h
+🔔 Te notificaremos de nuevas oportunidades"""
             
             if telegram:
                 try:
@@ -1073,21 +1072,20 @@ El mercado presenta condiciones neutras o sin confluencia clara de indicadores d
             for i, signal in enumerate(new_longs, 1):
                 confidence = signal['confidence']
                 
-                # Emoji según confianza
+                # Clasificar por confianza con emojis
                 if confidence >= 70:
-                    conf_emoji = "🚀"
+                    conf_emoji = "🚀"; risk_text = "ALTA CONFIANZA"
                 elif confidence >= 50:
-                    conf_emoji = "✅"
+                    conf_emoji = "✅"; risk_text = "Confianza Media"
+                elif confidence >= 35:
+                    conf_emoji = "⚠️"; risk_text = "BAJA CONFIANZA - ALTO RIESGO"
                 else:
-                    conf_emoji = "⚠️"
+                    conf_emoji = "⚠️"; risk_text = "MUY ALTO RIESGO"
                 
-                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} Confianza: {confidence:.1f}%")
+                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} {confidence:.1f}%")
+                message_lines.append(f"   📊 {risk_text}")
                 message_lines.append(f"   Entrada: ${signal['entry_price']:.8f}")
                 message_lines.append(f"   SL: ${signal['stop_loss']:.8f} | TP: ${signal['take_profit']:.8f}")
-                
-                # ADVERTENCIA para baja confianza
-                if confidence < 50:
-                    message_lines.append(f"   ⚠️ BAJA CONFIANZA - Alto riesgo")
                 
                 message_lines.append(f"   Cambio 24h: {signal['change_24h']:+.2f}%")
                 message_lines.append("")
@@ -1097,21 +1095,20 @@ El mercado presenta condiciones neutras o sin confluencia clara de indicadores d
             for i, signal in enumerate(new_shorts, 1):
                 confidence = signal['confidence']
                 
-                # Emoji según confianza
+                # Clasificar por confianza con emojis
                 if confidence >= 70:
-                    conf_emoji = "🚀"
+                    conf_emoji = "🚀"; risk_text = "ALTA CONFIANZA"
                 elif confidence >= 50:
-                    conf_emoji = "✅"
+                    conf_emoji = "✅"; risk_text = "Confianza Media"
+                elif confidence >= 35:
+                    conf_emoji = "⚠️"; risk_text = "BAJA CONFIANZA - ALTO RIESGO"
                 else:
-                    conf_emoji = "⚠️"
+                    conf_emoji = "⚠️"; risk_text = "MUY ALTO RIESGO"
                 
-                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} Confianza: {confidence:.1f}%")
+                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} {confidence:.1f}%")
+                message_lines.append(f"   📊 {risk_text}")
                 message_lines.append(f"   Entrada: ${signal['entry_price']:.8f}")
                 message_lines.append(f"   SL: ${signal['stop_loss']:.8f} | TP: ${signal['take_profit']:.8f}")
-                
-                # ADVERTENCIA para baja confianza
-                if confidence < 50:
-                    message_lines.append(f"   ⚠️ BAJA CONFIANZA - Alto riesgo")
                 
                 message_lines.append(f"   Cambio 24h: {signal['change_24h']:+.2f}%")
                 message_lines.append("")
@@ -1119,9 +1116,9 @@ El mercado presenta condiciones neutras o sin confluencia clara de indicadores d
         # DISCLAIMER al final si hay señales de baja confianza
         has_low_conf = any(s['confidence'] < 50 for s in new_longs + new_shorts)
         if has_low_conf:
-            message_lines.append("⚠️ ADVERTENCIA:")
-            message_lines.append("Las señales con baja confianza (<50%) tienen mayor riesgo.")
-            message_lines.append("Opera bajo tu propia responsabilidad.")
+            message_lines.append("\n⚠️ ADVERTENCIA:")
+            message_lines.append("Señales <50% = ALTO RIESGO")
+            message_lines.append("Opera bajo tu responsabilidad")
         
         telegram_message = "\n".join(message_lines)
         

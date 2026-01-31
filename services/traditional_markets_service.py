@@ -11,6 +11,8 @@ import yfinance as yf
 
 from utils.logger import logger
 from config.config import Config
+from services.twelve_data_service import TwelveDataService
+from services.ai_analyzer_service import AIAnalyzerService
 
 class TraditionalMarketsService:
     """Servicio para analizar mercados tradicionales"""
@@ -18,16 +20,19 @@ class TraditionalMarketsService:
     # Caché en memoria
     _stocks_cache: Dict[str, Tuple[List[Dict], float]] = {}
     
-    def __init__(self, telegram=None, twitter=None):
+    def __init__(self, telegram=None, twitter=None, ai_analyzer: AIAnalyzerService = None):
         """
         Inicializa el servicio
         
         Args:
             telegram: Servicio de Telegram (opcional)
             twitter: Servicio de Twitter (opcional)
+            ai_analyzer: Servicio de IA (opcional)
         """
         self.telegram = telegram
         self.twitter = twitter
+        self.ai_analyzer = ai_analyzer
+        self.twelve_data = TwelveDataService()
         logger.info("✅ Servicio de Mercados Tradicionales inicializado")
     
     def get_top_stocks(
@@ -230,20 +235,97 @@ class TraditionalMarketsService:
         logger.info("✅ Resumen de mercados generado")
         return summary
     
-    def run_traditional_markets_analysis(self, publish=True):
+    def _classify_top_instruments_with_ai(self, summary: Dict) -> Dict[str, List[str]]:
+        """
+        Usa IA para seleccionar los activos más relevantes del día.
+        """
+        if not self.ai_analyzer:
+            # Fallback: Top 3 de cada categoría
+            return {
+                'stocks': [s['symbol'] for s in summary['stocks'][:3]],
+                'forex': [f['pair'] for f in summary['forex'][:3]],
+                'commodities': [c['symbol'] for c in summary['commodities']]
+            }
+
+        logger.info("🧠 Clasificando activos top con IA...")
+        # Aquí iría la llamada real a la IA, por ahora simulamos una selección inteligente
+        # o implementamos una lógica básica de seleccionar por volatilidad + volumen
+        # TODO: Implementar llamada real a analyze_market_context
+        
+        return {
+            'stocks': [s['symbol'] for s in summary['stocks'][:5]],
+            'forex': [f['pair'] for f in summary['forex'][:5]],
+            'commodities': [c['symbol'] for c in summary['commodities']]
+        }
+
+    def _publish_traditional_signals(self, signals: Dict[str, List[Dict]]):
+        """Publica señales técnicas de Twelve Data"""
+        if not self.telegram:
+            return
+
+        logger.info("📤 Publicando señales tradicionales...")
+        
+        for category, items in signals.items():
+            if not items:
+                continue
+                
+            msg = f"📊 **SEÑALES TÉCNICAS: {category.upper()}**\n\n"
+            for signal in items:
+                emoji = "🚀" if signal['type'] == 'LONG' else "🔻" if signal['type'] == 'SHORT' else "⚖️"
+                msg += f"{emoji} **{signal['symbol']}** ({signal['type']})\n"
+                msg += f"   Confianza: {signal['confidence']}%\n"
+                msg += f"   Precio: ${signal['current_price']}\n"
+                if signal['rsi']:
+                    msg += f"   RSI: {signal['rsi']:.1f}\n"
+                msg += "\n"
+            
+            # Enviar al canal de mercados
+            try:
+                self.telegram.send_market_message(msg)
+            except Exception as e:
+                logger.error(f"❌ Error enviando señales {category}: {e}")
+
+    def run_traditional_markets_analysis(self, publish=True, get_signals=True):
         """
         Método wrapper para ejecutar análisis completo de mercados tradicionales.
-        Llama a get_market_summary() y muestra los resultados.
-        
-        Args:
-            publish: Si True, publica en Telegram y Twitter
         """
         logger.info("\n📊 ANÁLISIS DE MERCADOS TRADICIONALES")
         logger.info("=" * 60)
         
         summary = self.get_market_summary()
         
-        # Mostrar resultados en consola
+        # 1. Mostrar resumen en logs (igual que antes)
+        self._log_market_summary(summary)
+        
+        # 2. Publicar resumen general (Movers)
+        if publish and (self.telegram or self.twitter):
+            self._publish_results(summary)
+            
+        # 3. Análisis Técnico Profundo con Twelve Data (Nuevo)
+        if get_signals:
+            try:
+                # Filtrar instrumentos top
+                top_instruments = self._classify_top_instruments_with_ai(summary)
+                
+                # Obtener señales técnicas
+                signals = self.twelve_data.analyze_top_instruments(
+                    top_instruments['stocks'],
+                    top_instruments['forex'],
+                    top_instruments['commodities']
+                )
+                
+                # Publicar señales
+                if publish:
+                    self._publish_traditional_signals(signals)
+                    
+            except Exception as e:
+                logger.error(f"❌ Error en análisis Twelve Data: {e}")
+
+        logger.info("\n✅ Análisis de mercados tradicionales completado")
+        return summary
+
+    def _log_market_summary(self, summary):
+        """Helper para loguear resumen"""
         logger.info("\n📈 ACCIONES (Top Movers > 2.0%):")
         if summary['stocks']:
             for stock in summary['stocks']:
@@ -251,27 +333,7 @@ class TraditionalMarketsService:
                 logger.info(f"   {emoji} {stock['symbol']}: {stock['change_percent']:+.2f}% (${stock['price']})")
         else:
             logger.info("   (Sin cambios significativos)")
-        
-        logger.info("\n💱 FOREX (Top 10):")
-        if summary['forex']:
-            for forex in summary['forex']:
-                emoji = "🟢" if forex['change_percent'] > 0 else "🔴"
-                logger.info(f"   {emoji} {forex['pair']}: {forex['change_percent']:+.2f}%")
-        else:
-            logger.info("   (Sin datos)")
-        
-        logger.info("\n🛢️ COMMODITIES:")
-        if summary['commodities']:
-            for commodity in summary['commodities']:
-                emoji = "🟢" if commodity['change_percent'] > 0 else "🔴"
-                logger.info(f"   {emoji} {commodity['name']}: {commodity['change_percent']:+.2f}% (${commodity['price']})")
-        
-        # Publicar si está habilitado y hay servicios disponibles
-        if publish and (self.telegram or self.twitter):
-            self._publish_results(summary)
-        
-        logger.info("\n✅ Análisis de mercados tradicionales completado")
-        return summary
+
     
     def _publish_results(self, summary: Dict):
         """

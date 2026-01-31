@@ -78,6 +78,9 @@ class Config:
     # ========== GOOGLE GEMINI ==========
     GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
     
+    # ========== TWELVE DATA ==========
+    TWELVEDATA_API_KEY = os.getenv('TWELVEDATA_API_KEY')
+    
     # ========== OPENAI ==========
     # Mapeo de la variable del usuario (GOOGLE_GPT_API_KEY) a OPENAI_API_KEY
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or os.getenv('GOOGLE_GPT_API_KEY')
