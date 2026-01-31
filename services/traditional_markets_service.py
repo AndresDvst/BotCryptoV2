@@ -1,45 +1,22 @@
 """
 Servicio para análisis de mercados tradicionales (Acciones, Forex, Commodities).
-Utiliza Yahoo Finance para obtener datos en tiempo real.
+Optimizado para alto rendimiento y bajo rate limit usando batch requests y caché.
 """
-import yfinance as yf
+import time
 from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import yfinance as yf
+
 from utils.logger import logger
-from typing import List, Dict, Optional
+from config.config import Config
 
 class TraditionalMarketsService:
     """Servicio para analizar mercados tradicionales"""
     
-    # Símbolos principales a monitorear
-    STOCK_SYMBOLS = [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM',
-        'V', 'WMT', 'JNJ', 'PG', 'MA', 'HD', 'DIS', 'PYPL', 'NFLX', 'ADBE',
-        'CRM', 'INTC', 'CSCO', 'PEP', 'KO', 'NKE', 'MCD', 'BA', 'IBM'
-    ]
-    
-    FOREX_PAIRS = [
-        'EURUSD=X',  # Euro/USD
-        'GBPUSD=X',  # Libra/USD
-        'USDJPY=X',  # USD/Yen
-        'AUDUSD=X',  # Dólar Australiano/USD
-        'USDCAD=X',  # USD/Dólar Canadiense
-        'USDCHF=X',  # USD/Franco Suizo
-        'NZDUSD=X',  # Dólar Neozelandés/USD
-        'EURGBP=X',  # Euro/Libra
-        'EURJPY=X',  # Euro/Yen
-        'GBPJPY=X',  # Libra/Yen
-        'USDMXN=X',  # USD/Peso Mexicano
-        'USDBRL=X',  # USD/Real Brasileño
-    ]
-    
-    COMMODITIES = {
-        'GC=F': 'Oro',
-        'SI=F': 'Plata',
-        'CL=F': 'Crudo WTI',
-        'BZ=F': 'Brent',
-        'RB=F': 'Gasolina',
-        'HO=F': 'Petróleo para calefacción'
-    }
+    # Caché en memoria
+    _stocks_cache: Dict[str, Tuple[List[Dict], float]] = {}
     
     def __init__(self, telegram=None, twitter=None):
         """
@@ -53,53 +30,91 @@ class TraditionalMarketsService:
         self.twitter = twitter
         logger.info("✅ Servicio de Mercados Tradicionales inicializado")
     
-    def get_top_stocks(self, min_change_percent: float = 2.0, limit: int = 10) -> List[Dict]:
+    def get_top_stocks(
+        self,
+        symbols: Optional[List[str]] = None,
+        use_cache: bool = True,
+        ttl: int = 300,
+        min_change_percent: float = 2.0,
+        limit: int = 10,
+    ) -> List[Dict]:
         """
-        Obtiene las acciones con mayor cambio porcentual del día.
+        Obtiene las acciones con mayor cambio porcentual del día usando batch requests.
         
         Args:
-            min_change_percent: Cambio mínimo para filtrar (default 2%)
-            limit: Número máximo de resultados
+            symbols: Lista de símbolos. Si None, usa STOCK_SYMBOLS_DEFAULT.
+            use_cache: Si True, usa caché en memoria con TTL.
+            ttl: Tiempo de vida del caché en segundos (default 300).
+            min_change_percent: Filtro mínimo de cambio porcentual.
+            limit: Número máximo de resultados.
             
         Returns:
-            Lista de diccionarios con información de acciones
+            Lista de diccionarios con información de acciones.
         """
-        logger.info(f"📈 Analizando {len(self.STOCK_SYMBOLS)} acciones...")
-        
-        movers = []
-        
-        for symbol in self.STOCK_SYMBOLS:
+        default_symbols = getattr(Config, "STOCK_SYMBOLS_DEFAULT", [])
+        extended_symbols = getattr(Config, "STOCK_SYMBOLS_EXTENDED", [])
+        symbols_to_use = symbols or default_symbols or extended_symbols
+        if not symbols_to_use:
+            logger.warning("⚠️ No hay símbolos configurados para stocks")
+            return []
+
+        cache_key = f"{','.join(sorted(symbols_to_use))}:{min_change_percent}:{limit}"
+        now = time.time()
+        if use_cache:
+            cache_entry = self._stocks_cache.get(cache_key)
+            if cache_entry:
+                data, ts = cache_entry
+                if now - ts <= ttl:
+                    logger.info("♻️ Usando caché de acciones")
+                    return data
+
+        logger.info(f"📈 Analizando {len(symbols_to_use)} acciones en batch...")
+        movers: List[Dict] = []
+        tickers_obj = yf.Tickers(" ".join(symbols_to_use))
+
+        def fetch_symbol(sym: str) -> Optional[Dict]:
             try:
-                ticker = yf.Ticker(symbol)
-                hist = ticker.history(period='2d')
-                
+                t = tickers_obj.tickers.get(sym) or yf.Ticker(sym)
+                hist = t.history(period="2d")
                 if len(hist) < 2:
-                    continue
-                
-                current_price = hist['Close'].iloc[-1]
-                previous_close = hist['Close'].iloc[-2]
-                change_percent = ((current_price - previous_close) / previous_close) * 100
-                
-                if abs(change_percent) >= min_change_percent:
-                    info = ticker.info
-                    movers.append({
-                        'symbol': symbol,
-                        'name': info.get('longName', symbol),
-                        'price': round(current_price, 2),
-                        'change_percent': round(change_percent, 2),
-                        'volume': hist['Volume'].iloc[-1],
-                        'market_cap': info.get('marketCap', 0)
-                    })
-                    
+                    return None
+                current_price = float(hist["Close"].iloc[-1])
+                previous_close = float(hist["Close"].iloc[-2])
+                change_percent = ((current_price - previous_close) / previous_close) * 100.0
+                if abs(change_percent) < min_change_percent:
+                    return None
+                info = {}
+                try:
+                    info = t.get_info()
+                except Exception:
+                    pass
+                return {
+                    "symbol": sym,
+                    "name": info.get("longName", sym) if isinstance(info, dict) else sym,
+                    "price": round(current_price, 2),
+                    "change_percent": round(change_percent, 2),
+                    "volume": float(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0.0,
+                    "market_cap": info.get("marketCap", 0) if isinstance(info, dict) else 0,
+                }
             except Exception as e:
-                logger.warning(f"⚠️ Error obteniendo datos de {symbol}: {e}")
-                continue
-        
-        # Ordenar por cambio absoluto
-        movers.sort(key=lambda x: abs(x['change_percent']), reverse=True)
-        
+                logger.debug(f"⚠️ Error en {sym}: {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_symbol, s): s for s in symbols_to_use}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    movers.append(result)
+
+        movers.sort(key=lambda x: abs(x["change_percent"]), reverse=True)
+        movers = movers[:limit]
         logger.info(f"✅ Encontradas {len(movers)} acciones con cambio ≥ {min_change_percent}%")
-        return movers[:limit]
+
+        if use_cache:
+            self._stocks_cache[cache_key] = (movers, now)
+
+        return movers
     
     def get_forex_movers(self, min_change_percent: float = 2.0, limit: int = 10) -> List[Dict]:
         """
@@ -113,12 +128,14 @@ class TraditionalMarketsService:
         Returns:
             Lista de diccionarios con la info de los pares
         """
-        logger.info(f"💱 Analizando {len(self.FOREX_PAIRS)} pares de divisas...")
+        pairs = getattr(Config, "FOREX_PAIRS", [])
+        logger.info(f"💱 Analizando {len(pairs)} pares de divisas...")
         all_movers = []
         
-        for pair in self.FOREX_PAIRS:
+        tickers_obj = yf.Tickers(" ".join(pairs))
+        for pair in pairs:
             try:
-                ticker = yf.Ticker(pair)
+                ticker = tickers_obj.tickers.get(pair) or yf.Ticker(pair)
                 hist = ticker.history(period='2d')
                 
                 if len(hist) < 2:
@@ -158,13 +175,15 @@ class TraditionalMarketsService:
         Returns:
             Lista con precios actuales de commodities
         """
-        logger.info(f"🛢️ Obteniendo precios de {len(self.COMMODITIES)} commodities...")
+        commodities = getattr(Config, "COMMODITIES", {})
+        logger.info(f"🛢️ Obteniendo precios de {len(commodities)} commodities...")
         
         prices = []
         
-        for symbol, name in self.COMMODITIES.items():
+        tickers_obj = yf.Tickers(" ".join(list(commodities.keys())))
+        for symbol, name in commodities.items():
             try:
-                ticker = yf.Ticker(symbol)
+                ticker = tickers_obj.tickers.get(symbol) or yf.Ticker(symbol)
                 hist = ticker.history(period='2d')
                 
                 if len(hist) < 1:
@@ -261,43 +280,46 @@ class TraditionalMarketsService:
         Args:
             summary: Diccionario con el resumen de mercados
         """
-        # --- TELEGRAM (Mensaje consolidado) ---
+        # --- TELEGRAM ---
         if self.telegram:
-            message_lines = ["📊 MERCADOS TRADICIONALES\n"]
-            
-            # Acciones
             if summary['stocks']:
-                message_lines.append("📈 ACCIONES:")
+                message_lines = ["📊 MERCADOS TRADICIONALES\n", "📈 ACCIONES:"]
                 for stock in summary['stocks'][:10]:
                     emoji = "🟢" if stock['change_percent'] > 0 else "🔴"
                     message_lines.append(f"{emoji} {stock['symbol']}: {stock['change_percent']:+.2f}% (${stock['price']})")
-                message_lines.append("")
+                telegram_msg = "\n".join(message_lines)
+                try:
+                    self.telegram.send_market_message(telegram_msg, image_path=Config.STOCKS_IMAGE_PATH)
+                    logger.info("✅ Resultados de Acciones enviados a Telegram (Bot Markets)")
+                except Exception as e:
+                    logger.error(f"❌ Error enviando Acciones a Telegram: {e}")
             
-            # Forex
             if summary['forex']:
-                message_lines.append("💱 FOREX (Top 10):")
+                message_lines = ["📊 MERCADOS TRADICIONALES\n", "💱 FOREX (Top 10):"]
                 for forex in summary['forex'][:10]:
                     emoji = "🟢" if forex['change_percent'] > 0 else "🔴"
                     message_lines.append(f"{emoji} {forex['pair']}: {forex['change_percent']:+.2f}%")
-                message_lines.append("")
+                telegram_msg = "\n".join(message_lines)
+                try:
+                    self.telegram.send_market_message(telegram_msg, image_path=Config.FOREX_IMAGE_PATH)
+                    logger.info("✅ Resultados de Forex enviados a Telegram (Bot Markets)")
+                except Exception as e:
+                    logger.error(f"❌ Error enviando Forex a Telegram: {e}")
             
-            # Commodities
             if summary['commodities']:
-                message_lines.append("🛢️ COMMODITIES:")
+                message_lines = ["📊 MERCADOS TRADICIONALES\n", "🛢️ COMMODITIES:"]
                 for commodity in summary['commodities']:
                     emoji = "🟢" if commodity['change_percent'] > 0 else "🔴"
                     message_lines.append(f"{emoji} {commodity['name']}: {commodity['change_percent']:+.2f}% (${commodity['price']})")
-            
-            telegram_msg = "\n".join(message_lines)
-            try:
-                self.telegram.send_market_message(telegram_msg)
-                logger.info("✅ Resultados enviados a Telegram (Bot Markets)")
-            except Exception as e:
-                logger.error(f"❌ Error enviando a Telegram: {e}")
+                telegram_msg = "\n".join(message_lines)
+                try:
+                    self.telegram.send_market_message(telegram_msg, image_path=Config.COMMODITIES_IMAGE_PATH)
+                    logger.info("✅ Resultados de Commodities enviados a Telegram (Bot Markets)")
+                except Exception as e:
+                    logger.error(f"❌ Error enviando Commodities a Telegram: {e}")
         
         # --- TWITTER (Tweets Separados) ---
         if self.twitter:
-            import time
             try:
                 # Tweet 1: Acciones (solo si hay importantes)
                 if summary['stocks']:
@@ -313,10 +335,10 @@ class TraditionalMarketsService:
                         else:
                             break
                     
-                    self.twitter.post_tweet(tweet1.strip(), category='markets')
+                    self.twitter.post_tweet(tweet1.strip(), image_path=Config.STOCKS_IMAGE_PATH, category='markets')
                     logger.info("✅ Tweet de Acciones publicado")
                     logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                    time.sleep(30)
+                    time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
                 
                 # Tweet 2: Forex (Top 7 aprox para caber)
                 if summary['forex']:
@@ -332,10 +354,10 @@ class TraditionalMarketsService:
                         else:
                             break
                             
-                    self.twitter.post_tweet(tweet2.strip(), category='markets')
+                    self.twitter.post_tweet(tweet2.strip(), image_path=Config.FOREX_IMAGE_PATH, category='markets')
                     logger.info("✅ Tweet de Forex publicado")
                     logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                    time.sleep(30)
+                    time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
                 
                 # Tweet 3: Commodities
                 if summary['commodities']:
@@ -344,7 +366,7 @@ class TraditionalMarketsService:
                         emoji = "🟢" if commodity['change_percent'] > 0 else "🔴"
                         tweet3 += f"{emoji} {commodity['name']}: {commodity['change_percent']:+.2f}%\n"
                     
-                    self.twitter.post_tweet(tweet3.strip(), category='markets')
+                    self.twitter.post_tweet(tweet3.strip(), image_path=Config.COMMODITIES_IMAGE_PATH, category='markets')
                     logger.info("✅ Tweet de Commodities publicado")
                 
             except Exception as e:

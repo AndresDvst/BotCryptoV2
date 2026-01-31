@@ -33,132 +33,14 @@ class TwitterService:
         logger.info("✅ Servicio de Twitter inicializado")
     
     def _init_driver(self):
-        """Inicializa el driver de Chrome"""
-        try:
-            chrome_options = Options()
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--remote-debugging-port=9222')
-            # Configuración de visibilidad: usar headless según configuración
-            if getattr(Config, 'TWITTER_HEADLESS', False):
-                # Selenium 4+ recomienda '--headless=new' en algunos entornos
-                chrome_options.add_argument('--headless=new')
-
-            # Flags para reducir mensajes de media y estabilizar ejecución en entornos automatizados
-            chrome_options.add_argument('--log-level=3')
-            chrome_options.add_argument('--silent')
-            chrome_options.add_argument('--disable-logging')
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--disable-gpu-compositing')
-            chrome_options.add_argument('--mute-audio')
-            chrome_options.add_argument('--disable-software-rasterizer')
-            chrome_options.add_argument('--disable-accelerated-video-decode')
-            chrome_options.add_argument('--disable-accelerated-2d-canvas')
-            chrome_options.add_argument('--disable-accelerated-jpeg-decoding')
-            chrome_options.add_argument('--disable-features=VizDisplayCompositor')
-            chrome_options.add_argument('--disable-features=AudioServiceOutOfProcess')
-            chrome_options.add_argument('--disable-dev-tools')
-            chrome_options.add_argument('--disable-breakpad')
-            chrome_options.add_argument('--disable-component-update')
-            chrome_options.add_argument('--disable-background-networking')
-            chrome_options.add_argument('--disable-sync')
-            chrome_options.add_argument('--metrics-recording-only')
-            chrome_options.add_argument('--disable-default-apps')
-            chrome_options.add_argument('--no-first-run')
-            chrome_options.add_argument('--disable-extensions')
-
-
-            # Configurar perfil de Chrome persistente para mantener sesión de Twitter
-            user_data_dir = getattr(Config, 'CHROME_USER_DATA_DIR', None)
-            
-            # Si no hay configuración, crear perfil automático en el proyecto
-            if not user_data_dir:
-                user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
-                # Crear directorio si no existe
-                os.makedirs(user_data_dir, exist_ok=True)
-                logger.info(f"📁 Creando perfil de Chrome automático: {user_data_dir}")
-            
-            # Usar el perfil (existente o nuevo)
-            if os.path.exists(user_data_dir):
-                chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
-                chrome_options.add_argument('--profile-directory=Default')
-                logger.info(f"🔑 Usando perfil de Chrome persistente: {user_data_dir}")
-            else:
-                logger.warning(f"⚠️ No se pudo crear perfil de Chrome: {user_data_dir}")
-
-
-            # Simular un navegador real y abrir ventana maximizada para ver acciones
-            chrome_options.add_argument('--start-maximized')
-            chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-            
-            # Preparar archivo de log para chromedriver - usar os.devnull para eliminar spam
-            try:
-                os.makedirs('utils', exist_ok=True)
-            except Exception:
-                pass
-
-            # En Windows, redirigir stdout/stderr a NUL para suprimir mensajes de GPU/GCM
-            devnull = None
-            if sys.platform == 'win32':
-                devnull = open(os.devnull, 'w')
-
-            # Priorizar driver desde configuración
-            driver_path = Config.CHROMEDRIVER_PATH
-            if driver_path and os.path.isfile(driver_path):
-                 logger.info(f"🔧 Usando chromedriver desde CONFIG: {driver_path}")
-            else:
-                 driver_path = os.getenv('CHROMEDRIVER_PATH')
-            
-            if driver_path:
-                if not os.path.isfile(driver_path):
-                    logger.error(f"❌ CHROMEDRIVER_PATH establecido pero no existe: {driver_path}")
-                    if devnull:
-                        devnull.close()
-                    return False
-                logger.info(f"🔧 Usando chromedriver: {driver_path}")
-                # Crear servicio silenciando completamente stdout/stderr
-                service = Service(driver_path, log_path=os.devnull)
-                service.stdout = subprocess.DEVNULL
-                service.stderr = subprocess.DEVNULL
-                if sys.platform == 'win32':
-                    try:
-                        service.creationflags = subprocess.CREATE_NO_WINDOW
-                    except Exception:
-                        pass
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            else:
-                # Intentar obtener la ruta del driver desde webdriver-manager
-                try:
-                    driver_path = ChromeDriverManager().install()
-                except Exception as e:
-                    logger.error(f"❌ webdriver-manager falló al descargar/instalar chromedriver: {e}")
-                    logger.error("👉 Solución: ejecuta el bot desde PowerShell o descarga chromedriver manualmente y define CHROMEDRIVER_PATH.")
-                    if devnull:
-                        devnull.close()
-                    return False
-
-                if not driver_path:
-                    logger.error("❌ ChromeDriverManager no devolvió una ruta válida.")
-                    if devnull:
-                        devnull.close()
-                    return False
-
-                service = Service(driver_path, log_path=os.devnull)
-                service.stdout = subprocess.DEVNULL
-                service.stderr = subprocess.DEVNULL
-                if sys.platform == 'win32':
-                    try:
-                        service.creationflags = subprocess.CREATE_NO_WINDOW
-                    except Exception:
-                        pass
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-
-            logger.info(f"✅ Driver iniciado (headless={getattr(Config, 'TWITTER_HEADLESS', False)})")
-            
-            logger.info("✅ Driver de Chrome inicializado")
+        """Inicializa el driver de Chrome usando BrowserManager"""
+        from utils.browser_utils import BrowserManager
+        self.driver = BrowserManager.get_driver(headless=getattr(Config, 'TWITTER_HEADLESS', False))
+        if self.driver:
+            logger.info("✅ Servicio de Twitter: Driver inicializado correctamente")
             return True
-        except Exception as e:
-            logger.error(f"❌ Error al inicializar driver: {e}")
+        else:
+            logger.error("❌ Servicio de Twitter: Falló la inicialización del driver")
             return False
     
     def _human_type(self, element, text: str):

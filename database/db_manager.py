@@ -1,10 +1,10 @@
 """
 Gestor de base de datos SQLite para el bot de criptomonedas
 """
-import sqlite3
 import os
+import sqlite3
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from utils.logger import logger
 
 
@@ -27,12 +27,11 @@ class DatabaseManager:
         self.init_database()
         logger.info(f"✅ Base de datos inicializada: {db_path}")
     
-    def init_database(self):
+    def init_database(self) -> None:
         """Crea las tablas si no existen"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Tabla de análisis
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +44,6 @@ class DatabaseManager:
             )
         """)
         
-        # Tabla de datos de monedas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS coin_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +57,6 @@ class DatabaseManager:
             )
         """)
         
-        # Índices para consultas rápidas
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_analysis_timestamp 
             ON analysis(timestamp)
@@ -69,11 +66,15 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_coin_symbol 
             ON coin_data(symbol)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_coin_analysis 
+            ON coin_data(analysis_id)
+        """)
         
         conn.commit()
         conn.close()
     
-    def save_analysis(self, analysis_data: Dict) -> int:
+    def save_analysis(self, analysis_data: Dict[str, Any]) -> int:
         """
         Guarda un análisis completo en la base de datos
         
@@ -93,7 +94,6 @@ class DatabaseManager:
         cursor = conn.cursor()
         
         try:
-            # Guardar análisis principal
             cursor.execute("""
                 INSERT INTO analysis 
                 (timestamp, coins_analyzed, sentiment, fear_greed_index, ai_recommendation)
@@ -108,7 +108,6 @@ class DatabaseManager:
             
             analysis_id = cursor.lastrowid
             
-            # Guardar datos de monedas
             if 'coins' in analysis_data:
                 for coin in analysis_data['coins']:
                     cursor.execute("""
@@ -135,7 +134,7 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def get_latest_analysis(self) -> Optional[Dict]:
+    def get_latest_analysis(self) -> Optional[Dict[str, Any]]:
         """
         Obtiene el último análisis realizado
         
@@ -159,7 +158,6 @@ class DatabaseManager:
             
             analysis = dict(row)
             
-            # Obtener monedas del análisis
             cursor.execute("""
                 SELECT * FROM coin_data 
                 WHERE analysis_id = ?
@@ -176,7 +174,7 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def get_historical_data(self, days: int = 30) -> List[Dict]:
+    def get_historical_data(self, days: int = 30) -> List[Dict[str, Any]]:
         """
         Obtiene datos históricos de análisis
         
@@ -209,7 +207,7 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def get_coin_history(self, symbol: str, days: int = 30) -> List[Dict]:
+    def get_coin_history(self, symbol: str, days: int = 30) -> List[Dict[str, Any]]:
         """
         Obtiene el histórico de una moneda específica
         
@@ -245,7 +243,7 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> Dict[str, Any]:
         """
         Obtiene estadísticas generales de la base de datos
         

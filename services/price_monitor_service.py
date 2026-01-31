@@ -4,8 +4,8 @@ Detecta pumps/dumps y nuevos pares en tiempo real.
 """
 import threading
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Set, Optional
+from datetime import datetime
+from typing import Dict, List, Set, Optional, Tuple, Any
 from utils.logger import logger
 from services.binance_service import BinanceService
 from services.telegram_service import TelegramService
@@ -30,18 +30,17 @@ class PriceMonitorService:
         self.twitter = twitter
         self.binance = BinanceService()
         
-        # Control de hilos
-        self.monitoring_thread = None
+        self.monitoring_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.is_running = False
-        
-        # Cache de precios y pares
-        self.price_cache: Dict[str, float] = {}
+
+        self.price_cache: Dict[str, Dict[str, Any]] = {}
         self.known_pairs: Set[str] = set()
         
         # Configuración
         self.check_interval = 300  # 5 minutos en segundos
         self.pump_dump_threshold = 5.0  # 5% de cambio
+        self.price_cache_ttl = 900  # 15 minutos
         
         logger.info("✅ Servicio de Monitoreo de Precios inicializado")
     
@@ -52,7 +51,7 @@ class PriceMonitorService:
         Args:
             duration_hours: Duración del monitoreo en horas (default: 2)
         """
-        if self.is_running:
+        if self.is_running and self.monitoring_thread and self.monitoring_thread.is_alive():
             logger.warning("⚠️ El monitoreo ya está en ejecución")
             return
         
@@ -102,8 +101,8 @@ class PriceMonitorService:
             # Inicializar snapshot de pares conocidos
             self._initialize_known_pairs()
             
-            # Inicializar cache de precios
-            self._initialize_price_cache()
+            initial_tickers = self.binance.exchange.fetch_tickers()
+            self._initialize_price_cache(initial_tickers)
             
             logger.info(f"📊 Snapshot inicial: {len(self.known_pairs)} pares, {len(self.price_cache)} precios")
             
@@ -113,10 +112,9 @@ class PriceMonitorService:
                 
                 logger.info(f"\n🔍 Ciclo de monitoreo #{iteration} - {datetime.now().strftime('%H:%M:%S')}")
                 
-                # 1. Detectar pumps y dumps
-                self._check_price_movements()
+                current_tickers = self.binance.exchange.fetch_tickers()
+                self._check_price_movements(current_tickers)
                 
-                # 2. Detectar nuevos pares
                 self._check_new_pairs()
                 
                 # Calcular tiempo restante
@@ -152,18 +150,19 @@ class PriceMonitorService:
             logger.error(f"❌ Error inicializando pares conocidos: {e}")
             self.known_pairs = set()
     
-    def _initialize_price_cache(self):
+    def _initialize_price_cache(self, tickers: Dict[str, Dict[str, Any]]):
         """Inicializa el cache de precios con valores actuales"""
         try:
-            # Obtener top 50 por volumen
-            tickers = self.binance.exchange.fetch_tickers()
             usdt_pairs = {k: v for k, v in tickers.items() if k.endswith('/USDT')}
             
             # Ordenar por volumen y tomar top 50
             sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1].get('quoteVolume', 0), reverse=True)[:50]
             
             for symbol, ticker in sorted_pairs:
-                self.price_cache[symbol] = ticker.get('last', 0)
+                self.price_cache[symbol] = {
+                    "price": ticker.get("last", 0),
+                    "timestamp": time.time(),
+                }
             
             logger.info(f"✅ Cache de precios inicializado con {len(self.price_cache)} pares")
             
@@ -171,19 +170,28 @@ class PriceMonitorService:
             logger.error(f"❌ Error inicializando cache de precios: {e}")
             self.price_cache = {}
     
-    def _check_price_movements(self):
+    def _cleanup_price_cache(self) -> None:
+        now = time.time()
+        to_delete = []
+        for symbol, entry in self.price_cache.items():
+            ts = entry.get("timestamp", 0)
+            if ts and now - ts > self.price_cache_ttl:
+                to_delete.append(symbol)
+        for symbol in to_delete:
+            self.price_cache.pop(symbol, None)
+
+    def _check_price_movements(self, tickers: Dict[str, Dict[str, Any]]):
         """Detecta pumps y dumps comparando precios actuales con cache"""
         try:
             alerts = []
-            
-            # Obtener precios actuales
-            tickers = self.binance.exchange.fetch_tickers()
-            
-            for symbol, old_price in self.price_cache.items():
+            self._cleanup_price_cache()
+
+            for symbol, entry in list(self.price_cache.items()):
+                old_price = float(entry.get("price", 0))
                 if symbol not in tickers:
                     continue
                 
-                current_price = tickers[symbol].get('last', 0)
+                current_price = float(tickers[symbol].get('last', 0))
                 
                 if old_price > 0 and current_price > 0:
                     change_percent = ((current_price - old_price) / old_price) * 100
@@ -202,8 +210,10 @@ class PriceMonitorService:
                         
                         alerts.append(alert)
                         
-                        # Actualizar cache
-                        self.price_cache[symbol] = current_price
+                        self.price_cache[symbol] = {
+                            "price": current_price,
+                            "timestamp": time.time(),
+                        }
                         
                         # Guardar en DB
                         self._save_price_alert(alert)
@@ -212,7 +222,7 @@ class PriceMonitorService:
                 logger.info(f"🚨 {len(alerts)} alertas de precio detectadas")
                 self._publish_price_alerts(alerts)
             else:
-                logger.info("✅ No se detectaron cambios significativos de precio")
+                logger.info("✅ Sin cambios significativos de precio")
             
         except Exception as e:
             logger.error(f"❌ Error verificando movimientos de precio: {e}")
@@ -252,13 +262,21 @@ class PriceMonitorService:
         except Exception as e:
             logger.error(f"❌ Error verificando nuevos pares: {e}")
     
-    def _save_price_alert(self, alert: Dict):
-        """Guarda alerta de precio en la base de datos"""
+    def _db_execute(self, query: str, params: Tuple[Any, ...]) -> None:
         try:
             conn = self.db.get_connection()
             cursor = conn.cursor()
-            
-            cursor.execute("""
+            cursor.execute(query, params)
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"⚠️ Error ejecutando operación DB: {e}")
+
+    def _save_price_alert(self, alert: Dict):
+        """Guarda alerta de precio en la base de datos"""
+        try:
+            self._db_execute("""
                 INSERT INTO price_alerts 
                 (symbol, alert_type, price_before, price_after, change_percent)
                 VALUES (%s, %s, %s, %s, %s)
@@ -270,29 +288,18 @@ class PriceMonitorService:
                 alert['change_percent']
             ))
             
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
         except Exception as e:
             logger.warning(f"⚠️ Error guardando alerta en DB: {e}")
     
     def _save_new_pair(self, symbol: str, price: float):
         """Guarda nuevo par detectado en la base de datos"""
         try:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
+            self._db_execute("""
                 INSERT INTO new_pairs_detected 
                 (symbol, exchange, first_price)
                 VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE detected_at = CURRENT_TIMESTAMP
             """, (symbol, 'binance', price))
-            
-            conn.commit()
-            cursor.close()
-            conn.close()
             
         except Exception as e:
             logger.warning(f"⚠️ Error guardando nuevo par en DB: {e}")
@@ -354,11 +361,14 @@ class PriceMonitorService:
             if not self.known_pairs:
                 self._initialize_known_pairs()
             
+            # Fetch tickers once
+            tickers = self.binance.exchange.fetch_tickers()
+            
             if not self.price_cache:
-                self._initialize_price_cache()
+                self._initialize_price_cache(tickers)
             
             # Ejecutar checks
-            self._check_price_movements()
+            self._check_price_movements(tickers)
             self._check_new_pairs()
             
             logger.info("✅ Ciclo de monitoreo completado")

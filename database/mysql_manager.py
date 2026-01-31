@@ -1,10 +1,11 @@
 """
 Gestor de base de datos MySQL para el bot de criptomonedas
 """
-import pymysql
 import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import pymysql
 from utils.logger import logger
 from config.config import Config
 
@@ -40,7 +41,7 @@ class MySQLManager:
         self.init_database()
         logger.info(f"✅ Base de datos MySQL inicializada: {database}")
     
-    def get_connection(self, use_db=True):
+    def get_connection(self, use_db: bool = True) -> pymysql.connections.Connection:
         """Obtiene una conexión a MySQL"""
         try:
             if use_db:
@@ -65,7 +66,7 @@ class MySQLManager:
             logger.error(f"❌ Error conectando a MySQL: {e}")
             raise
     
-    def init_database(self):
+    def init_database(self) -> None:
         """Crea la base de datos y tablas si no existen"""
         try:
             # Crear base de datos si no existe
@@ -126,8 +127,8 @@ class MySQLManager:
             logger.error(f"❌ Error inicializando base de datos: {e}")
             raise
     
-    def _execute_v3_schema(self, cursor):
-        """Ejecuta el script SQL de V3 para crear nuevas tablas"""
+    def _execute_v3_schema(self, cursor: pymysql.cursors.Cursor) -> None:
+        """Ejecuta el script SQL de V3 para crear nuevas tablas de forma idempotente"""
         try:
             schema_path = os.path.join(os.path.dirname(__file__), 'v3_schema.sql')
             
@@ -141,23 +142,29 @@ class MySQLManager:
                 sql_script = f.read()
             
             # Ejecutar cada statement separadamente
-            statements = sql_script.split(';')
+            statements = [s.strip() for s in sql_script.split(';') if s.strip()]
             for statement in statements:
-                statement = statement.strip()
-                if statement and not statement.startswith('--'):
-                    try:
-                        cursor.execute(statement)
-                    except Exception as e:
-                        # Ignorar errores de duplicados (tablas ya existen)
-                        if 'already exists' not in str(e).lower():
-                            logger.warning(f"⚠️ Error en statement SQL: {e}")
+                if statement.startswith('--'):
+                    continue
+                try:
+                    cursor.execute(statement)
+                except Exception as e:
+                    msg = str(e).lower()
+                    if 'already exists' in msg or 'duplicate' in msg:
+                        logger.info("ℹ️ Statement ya aplicado, continuando")
+                        continue
+                    logger.warning(f"⚠️ Error en statement SQL: {e}")
             
             logger.info("✅ Schema V3 ejecutado correctamente")
             
         except Exception as e:
             logger.warning(f"⚠️ Error ejecutando schema V3: {e}")
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
     
-    def save_analysis(self, analysis_data: Dict) -> int:
+    def save_analysis(self, analysis_data: Dict[str, Any]) -> int:
         """
         Guarda un análisis completo en la base de datos
         
@@ -214,7 +221,7 @@ class MySQLManager:
             cursor.close()
             conn.close()
     
-    def get_latest_analysis(self) -> Optional[Dict]:
+    def get_latest_analysis(self) -> Optional[Dict[str, Any]]:
         """Obtiene el último análisis realizado"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -248,7 +255,7 @@ class MySQLManager:
             cursor.close()
             conn.close()
     
-    def get_historical_data(self, days: int = 30) -> List[Dict]:
+    def get_historical_data(self, days: int = 30) -> List[Dict[str, Any]]:
         """Obtiene datos históricos de análisis"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -272,7 +279,7 @@ class MySQLManager:
             cursor.close()
             conn.close()
     
-    def get_coin_history(self, symbol: str, days: int = 30) -> List[Dict]:
+    def get_coin_history(self, symbol: str, days: int = 30) -> List[Dict[str, Any]]:
         """Obtiene el histórico de una moneda específica"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -298,7 +305,7 @@ class MySQLManager:
             cursor.close()
             conn.close()
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> Dict[str, Any]:
         """Obtiene estadísticas generales de la base de datos"""
         conn = self.get_connection()
         cursor = conn.cursor()

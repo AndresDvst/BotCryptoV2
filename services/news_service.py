@@ -2,17 +2,18 @@
 Servicio de Scraping de Noticias en Tiempo Real.
 Integra CryptoPanic API y Google News RSS con filtro de relevancia por IA.
 """
+import time
 import feedparser
 import hashlib
 import requests
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import List, Dict, Optional, Tuple, Any
 from utils.logger import logger
 from services.ai_analyzer_service import AIAnalyzerService
 from services.telegram_service import TelegramService
 from services.twitter_service import TwitterService
 from database.mysql_manager import MySQLManager
-import time
 
 
 class NewsService:
@@ -49,6 +50,9 @@ class NewsService:
         # Configuración
         self.min_relevance_score = 7  # Publicar solo noticias con score >= 7
         self.check_interval = 420  # 7 minutos en segundos
+        self.max_ai_calls_per_cycle = 10
+        self._ai_cache_ttl = 3600
+        self._ai_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
         
         logger.info("✅ Servicio de Noticias inicializado")
     
@@ -183,30 +187,33 @@ class NewsService:
         """
         try:
             logger.info("📰 Obteniendo noticias de Google News...")
-            
-            all_news = []
-            
-            for feed_url in self.google_news_feeds:
+            all_news: List[Dict] = []
+
+            def parse_feed(feed_url: str) -> List[Dict]:
+                items: List[Dict] = []
                 try:
                     feed = feedparser.parse(feed_url)
-                    
-                    for entry in feed.entries[:5]:  # 5 noticias por feed
+                    for entry in feed.entries[:5]:
                         news = {
-                            'title': entry.get('title', ''),
-                            'url': entry.get('link', ''),
-                            'source': 'Google News',
-                            'category': self._categorize_from_url(feed_url),
-                            'published_at': entry.get('published', '')
+                            "title": entry.get("title", ""),
+                            "url": entry.get("link", ""),
+                            "source": "Google News",
+                            "category": self._categorize_from_url(feed_url),
+                            "published_at": entry.get("published", ""),
                         }
-                        news['hash'] = self.get_news_hash(news['title'], news['url'])
-                        all_news.append(news)
-                    
-                    time.sleep(1)  # Evitar rate limits
-                    
+                        news["hash"] = self.get_news_hash(news["title"], news["url"])
+                        items.append(news)
                 except Exception as e:
                     logger.warning(f"⚠️ Error con feed {feed_url}: {e}")
-                    continue
-            
+                return items
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(parse_feed, url): url for url in self.google_news_feeds}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        all_news.extend(result)
+
             logger.info(f"✅ Obtenidas {len(all_news)} noticias de Google News")
             return all_news
             
@@ -229,6 +236,17 @@ class NewsService:
         else:
             return 'general'
     
+    def _get_ai_cached(self, key: str) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        if key in self._ai_cache:
+            value, expires_at = self._ai_cache[key]
+            if expires_at > now:
+                return value
+        return None
+
+    def _set_ai_cached(self, key: str, value: Dict[str, Any], ttl_seconds: int) -> None:
+        self._ai_cache[key] = (value, time.time() + ttl_seconds)
+
     def filter_news_by_relevance(self, news: Dict) -> Optional[Dict]:
         """
         Filtra noticia por relevancia usando IA.
@@ -240,36 +258,22 @@ class NewsService:
             Noticia con score de relevancia o None si no es relevante
         """
         try:
-            # Crear prompt para Gemini
-            prompt = f"""
-Analiza la siguiente noticia y asigna un score de relevancia del 1 al 10.
+            cached = self._get_ai_cached(news['hash'])
+            if cached:
+                news['relevance_score'] = int(cached.get('score', 5))
+                news['summary'] = str(cached.get('summary', news['title'][:100]))
+                return news if news['relevance_score'] >= self.min_relevance_score else None
 
-Criterios:
-- 10: Noticia extremadamente importante (crash, regulación mayor, hack grande)
-- 7-9: Noticia muy relevante (movimientos significativos, anuncios importantes)
-- 4-6: Noticia moderadamente relevante
-- 1-3: Noticia poco relevante o clickbait
+            analysis = self.ai_analyzer.analyze_text(news['title'])
+            score = int(analysis.get('score', 5))
+            summary = str(analysis.get('summary', news['title'][:100]))
+            score = max(1, min(10, score))
 
-Título: {news['title']}
-Categoría: {news['category']}
-
-Responde SOLO con un número del 1 al 10, sin explicación.
-"""
-            
-            # Obtener score de Gemini
-            response = self.ai_analyzer.analyze_text(prompt)
-            
-            # Extraer número
-            try:
-                score = int(response.strip())
-                score = max(1, min(10, score))  # Limitar entre 1-10
-            except:
-                score = 5  # Score por defecto si falla el parsing
-            
             news['relevance_score'] = score
-            
+            news['summary'] = summary
+            self._set_ai_cached(news['hash'], {'score': score, 'summary': summary}, self._ai_cache_ttl)
+
             logger.info(f"📊 Relevancia: {score}/10 - {news['title'][:50]}...")
-            
             return news if score >= self.min_relevance_score else None
             
         except Exception as e:
@@ -325,7 +329,7 @@ Responde SOLO con un número del 1 al 10, sin explicación.
             telegram_text += f"⭐ Relevancia: {score}/10\n"
             telegram_text += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
-            classification = self.ai_analyzer.classify_news_category(news['title'], summary)
+            classification = self.ai_analyzer.classify_news_category(news['title'], news.get('summary', ''))
             category = classification.get('category', news.get('category', 'crypto'))
             logger.info(f"📬 Clasificación IA: {category} (confianza {classification.get('confidence', 0)}/10)")
             
@@ -358,32 +362,35 @@ Responde SOLO con un número del 1 al 10, sin explicación.
             logger.info(f"📰 SCRAPING DE NOTICIAS - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("=" * 60 + "\n")
             
-            # 1. Obtener noticias de todas las fuentes
             all_news = []
             all_news.extend(self.fetch_cryptopanic_news())
             all_news.extend(self.fetch_google_news())
             
             logger.info(f"📊 Total de noticias obtenidas: {len(all_news)}")
             
-            # 2. Filtrar duplicados
-            unique_news = []
+            unique_news: List[Dict] = []
             seen_hashes = set()
-            
             for news in all_news:
-                if news['hash'] not in seen_hashes and not self.is_news_published(news['hash']):
-                    unique_news.append(news)
-                    seen_hashes.add(news['hash'])
+                h = news['hash']
+                if h in seen_hashes:
+                    continue
+                if self.is_news_published(h):
+                    continue
+                unique_news.append(news)
+                seen_hashes.add(h)
             
             logger.info(f"📊 Noticias únicas (no publicadas): {len(unique_news)}")
             
-            # 3. Filtrar por relevancia con IA
-            relevant_news = []
-            
-            for news in unique_news[:10]:  # Limitar a 10 para no saturar IA
+            relevant_news: List[Dict] = []
+            ai_calls = 0
+            for news in unique_news:
+                if ai_calls >= self.max_ai_calls_per_cycle:
+                    break
                 filtered = self.filter_news_by_relevance(news)
                 if filtered:
                     relevant_news.append(filtered)
-                time.sleep(2)  # Evitar rate limits de Gemini
+                ai_calls += 1
+                time.sleep(1)
             
             logger.info(f"📊 Noticias relevantes (score ≥{self.min_relevance_score}): {len(relevant_news)}")
             
@@ -393,7 +400,7 @@ Responde SOLO con un número del 1 al 10, sin explicación.
             for news in relevant_news[:3]:  # Máximo 3 noticias por ciclo
                 self.publish_news(news)
                 published_count += 1
-                time.sleep(30)  # Esperar entre publicaciones
+                time.sleep(20)
             
             elapsed_time = time.time() - start_time
             logger.info("\n" + "=" * 60)

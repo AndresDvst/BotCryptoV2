@@ -1,6 +1,8 @@
 """
 Orquestador principal del bot de criptomonedas.
-Coordina todos los servicios y ejecuta el flujo completo del análisis.
+Refactor completo con inicialización robusta, cooldowns por categoría,
+reintentos con backoff, separación análisis/publicación, health-check
+y tracking de performance por paso.
 """
 from services.binance_service import BinanceService
 from services.market_sentiment_service import MarketSentimentService
@@ -19,309 +21,325 @@ import time
 import json
 import os
 from database.mysql_manager import MySQLManager
+from typing import Any, Dict, Optional, List, Tuple
+import threading
 
 class CryptoBotOrchestrator:
-    """Orquestador principal que coordina todos los servicios"""
-    
-    # Archivo para guardar timestamps de última publicación
+    """Orquestador principal que coordina servicios y ciclo de análisis/publicación"""
+
+    COOLDOWNS: Dict[str, float] = {
+        "market_analysis": 2.0,
+        "technical_signals": 1.0,
+        "news": 0.5,
+        "price_alerts": 0.25,
+        "stable_coins": 1.0,
+    }
+
     COOLDOWN_FILE = "last_publication.json"
-    COOLDOWN_HOURS = 2  # Horas de cooldown entre publicaciones
-    
+
+    class RecoverableError(Exception):
+        """Error recuperable para reintentos automáticos"""
+
+    class CriticalError(Exception):
+        """Error crítico que aborta el ciclo"""
+
+    class PerformanceTracker:
+        """Context manager para medir tiempos de pasos"""
+        def __init__(self):
+            self._steps: List[Tuple[str, float]] = []
+        def step(self, name: str):
+            start = time.time()
+            def _end():
+                elapsed = time.time() - start
+                self._steps.append((name, elapsed))
+            return _PerfCtx(_end)
+        def summary(self) -> List[Tuple[str, float]]:
+            return sorted(self._steps, key=lambda x: x[1], reverse=True)
+
     def __init__(self):
-        """Inicializa todos los servicios necesarios"""
+        """Inicializa servicios con modo degradado y prepara estructuras internas"""
         logger.info("=" * 60)
         logger.info("🤖 INICIANDO CRYPTO BOT")
         logger.info("=" * 60)
-        
-        try:
-            # Validar configuración
-            Config.validate()
-            
-            # Inicializar servicios básicos
-            self.binance = BinanceService()
-            self.market_sentiment = MarketSentimentService()
-            self.ai_analyzer = AIAnalyzerService()
-            self.telegram = TelegramService()
-            self.twitter = TwitterService()
-            self.db = MySQLManager()
-            
-            # Inicializar servicios V3
-            self.traditional_markets = TraditionalMarketsService(self.telegram, self.twitter)
-            self.technical_analysis = TechnicalAnalysisService()
-            self.price_monitor = PriceMonitorService(self.db, self.telegram, self.twitter)
-            self.news_service = NewsService(self.db, self.telegram, self.twitter, self.ai_analyzer)
-            self.tradingview_news = TradingViewNewsService(self.telegram, self.twitter, self.ai_analyzer)
+        Config.validate()
+        self._services: Dict[str, Any] = {}
+        self._failed_services: List[str] = []
+        self._lock = threading.RLock()
+        self._pub_lock = threading.RLock()
+        self._category_last_pub: Dict[str, float] = self._load_last_publication_time()
+        self._init_all_services()
+        self._bind_service_attrs()
+        if getattr(Config, "TWITTER_USERNAME", None) and getattr(Config, "TWITTER_PASSWORD", None):
+            try:
+                self.twitter.login_twitter(Config.TWITTER_USERNAME, Config.TWITTER_PASSWORD)
+            except Exception as e:
+                logger.warning(f"⚠️ Login automático de Twitter falló: {e}")
 
-            # Intentar login automático en Twitter si hay credenciales en la configuración
-            if getattr(Config, 'TWITTER_USERNAME', None) and getattr(Config, 'TWITTER_PASSWORD', None):
-                try:
-                    login_ok = self.twitter.login_twitter(Config.TWITTER_USERNAME, Config.TWITTER_PASSWORD)
-                    if login_ok:
-                        logger.info("✅ Twitter: login automático completado")
-                    else:
-                        logger.warning("⚠️ Twitter: login automático falló")
-                except Exception as e:
-                    logger.error(f"❌ Error en login automático de Twitter: {e}")
-            
-            logger.info("✅ Todos los servicios inicializados correctamente")
-            
+    def _init_service(self, name: str, cls: Any, critical: bool = False) -> None:
+        """Inicializa un servicio con manejo de errores y modo degradado"""
+        try:
+            instance = cls()
+            with self._lock:
+                self._services[name] = instance
         except Exception as e:
-            logger.error(f"❌ Error crítico al inicializar servicios: {e}")
-            raise
-    
-    def _load_last_publication_time(self) -> dict:
-        """Carga el timestamp de la última publicación desde archivo JSON"""
+            with self._lock:
+                self._services[name] = None
+                self._failed_services.append(name)
+            if critical:
+                raise RuntimeError(f"Servicio crítico {name} falló: {e}")
+            logger.warning(f"⚠️ Servicio opcional {name} degradado: {e}")
+
+    def _init_all_services(self) -> None:
+        """Inicializa todos los servicios requeridos"""
+        self._init_service("binance", BinanceService, critical=True)
+        self._init_service("market_sentiment", MarketSentimentService, critical=False)
+        self._init_service("ai_analyzer", AIAnalyzerService, critical=True)
+        self._init_service("telegram", TelegramService, critical=False)
+        self._init_service("twitter", TwitterService, critical=False)
+        self._init_service("db", MySQLManager, critical=False)
+        self._init_service("technical_analysis", TechnicalAnalysisService, critical=False)
+        self._init_service("traditional_markets", lambda: TraditionalMarketsService(self._services.get("telegram"), self._services.get("twitter")), critical=False)
+        self._init_service("price_monitor", lambda: PriceMonitorService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter")), critical=False)
+        self._init_service("news_service", lambda: NewsService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
+        self._init_service("tradingview_news", lambda: TradingViewNewsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
+
+    def _bind_service_attrs(self) -> None:
+        """Expone servicios como atributos para compatibilidad"""
+        self.binance = self._services.get("binance")
+        self.market_sentiment = self._services.get("market_sentiment")
+        self.ai_analyzer = self._services.get("ai_analyzer")
+        self.telegram = self._services.get("telegram")
+        self.twitter = self._services.get("twitter")
+        self.db = self._services.get("db")
+        self.traditional_markets = self._services.get("traditional_markets")
+        self.technical_analysis = self._services.get("technical_analysis")
+        self.price_monitor = self._services.get("price_monitor")
+        self.news_service = self._services.get("news_service")
+        self.tradingview_news = self._services.get("tradingview_news")
+
+    def _load_last_publication_time(self) -> Dict[str, float]:
+        """Carga timestamps por categoría desde JSON"""
         try:
             if os.path.exists(self.COOLDOWN_FILE):
-                with open(self.COOLDOWN_FILE, 'r') as f:
-                    return json.load(f)
+                with open(self.COOLDOWN_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return {k: float(v) for k, v in data.items()}
             return {}
-        except Exception as e:
-            logger.warning(f"⚠️ Error cargando cooldown: {e}")
+        except Exception:
             return {}
-    
-    def _save_last_publication_time(self):
-        """Guarda el timestamp actual como última publicación"""
-        try:
-            data = {
-                'last_publication': datetime.now().isoformat(),
-                'timestamp': time.time()
-            }
-            with open(self.COOLDOWN_FILE, 'w') as f:
-                json.dump(data, f, indent=2)
-            logger.info(f"✅ Timestamp de publicación guardado")
-        except Exception as e:
-            logger.warning(f"⚠️ Error guardando cooldown: {e}")
-    
-    def _can_publish(self) -> bool:
-        """
-        Verifica si han pasado suficientes horas desde la última publicación.
-        
-        Returns:
-            True si puede publicar, False si está en cooldown
-        """
-        last_pub = self._load_last_publication_time()
-        
-        if not last_pub or 'timestamp' not in last_pub:
-            logger.info("✅ Primera publicación, no hay cooldown")
-            return True
-        
-        last_time = last_pub['timestamp']
-        current_time = time.time()
-        hours_passed = (current_time - last_time) / 3600
-        
-        if hours_passed >= self.COOLDOWN_HOURS:
-            logger.info(f"✅ Han pasado {hours_passed:.1f} horas, puede publicar")
-            return True
-        else:
-            hours_remaining = self.COOLDOWN_HOURS - hours_passed
-            logger.warning(f"⏳ COOLDOWN ACTIVO: Faltan {hours_remaining:.1f} horas para poder publicar")
-            logger.warning(f"   Última publicación: {last_pub.get('last_publication', 'N/A')}")
-            return False
-    
-    def run_analysis_cycle(self, is_morning: bool = False) -> bool:
-        """
-        Ejecuta un ciclo completo de análisis.
-        
-        Args:
-            is_morning: True si es el reporte matutino de las 6 AM
-            
-        Returns:
-            True si el ciclo se completó exitosamente
-        """
-        try:
-            start_time = time.time()
-            logger.info("\n" + "=" * 60)
-            logger.info(f"🚀 INICIANDO CICLO DE ANÁLISIS - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info("=" * 60 + "\n")
-            
-            # PASO 1: Consultar Binance y filtrar monedas
-            logger.info("📊 PASO 1: Consultando Binance y filtrando monedas...")
-            significant_coins = self.binance.filter_significant_changes()
-            if not significant_coins:
-                logger.warning("⚠️ No se encontraron monedas con cambios significativos")
-                return False
 
-            # PASO 2: Obtener cambios de 2 horas usando Binance
-            logger.info("\n⏱️ PASO 2: Consultando cambios de 2h en Binance...")
-            coins_enriched = self.binance.get_2hour_change(significant_coins)
-
-            # Verificar cooldown antes de publicar
-            can_publish = self._can_publish()
-
-            # PASO 2.5: Análisis técnico de monedas significativas (Top 5 LONG/SHORT)
-            logger.info("\n🎯 PASO 2.5: Análisis técnico de monedas significativas...")
-            technical_signals = self.technical_analysis.analyze_significant_coins(
-                significant_coins,
-                self.telegram if can_publish else None,
-                self.twitter if can_publish else None,
-                capital=30,
-                risk_percent=30
-            )
-
-            # PASO 3: Analizar sentimiento del mercado
-            logger.info("\n🌡️ PASO 3: Analizando sentimiento del mercado...")
-            market_data = self.market_sentiment.analyze_market_sentiment()
-
-            # PASO 4: Análisis con IA (Sentimiento de Mercado)
-            logger.info("\n🧠 PASO 4: Analizando datos con Inteligencia Artificial (Gemini)...")
-            ai_analysis = self.ai_analyzer.analyze_and_recommend(
-                coins_enriched,
-                market_data
-            )
-
-            # PASO 4.5: Scraping de Noticias TradingView
-            if can_publish:
-                logger.info("\n📰 PASO 4.5: Buscando noticias en TradingView...")
-                self.tradingview_news.process_and_publish()
-            else:
-                logger.info("\n⏭️ PASO 4.5: SALTADO - Cooldown activo, no se buscarán noticias")
-
-            # PASO 5: Generar resúmenes para Twitter
-            logger.info("\n✍️ PASO 5: Generando resúmenes para Twitter...")
-            twitter_summaries = self.ai_analyzer.generate_twitter_4_summaries(
-                market_data,
-                significant_coins,  # Monedas sin datos de 2h
-                coins_enriched,     # Monedas con datos de 2h
-                max_chars=280
-            )
-            
-            # PASO 6: Enviar a Telegram (solo si no hay cooldown)
-            telegram_success = False
-            if can_publish:
-                logger.info("\n✈️ PASO 6: Enviando reporte detallado a Telegram...")
-                telegram_success = self.telegram.send_report(
-                    ai_analysis,
-                    market_data,
-                    significant_coins,  # Monedas sin datos de 2h
-                    coins_enriched      # Monedas con datos de 2h
-                )
-            else:
-                logger.info("\n⏭️ PASO 6: SALTADO - Cooldown activo, no se enviará a Telegram")
-
-            # PASO 8: Publicar en Twitter (solo si no hay cooldown)
-            twitter_success_up_24h = False
-            twitter_success_down_24h = False
-            twitter_success_up_2h = False
-            twitter_success_down_2h = False
-            
-            if can_publish:
-                logger.info("\n🐦 PASO 7: Publicando en Twitter...")
-                if is_morning:
-                    image_path = Config.MORNING_IMAGE_PATH
-                    logger.info("☀️ Usando imagen de reporte matutino")
-                else:
-                    image_path = Config.REPORT_IMAGE_PATH
-                    logger.info("📊 Usando imagen de reporte regular")
-
-                import time as _time
-                twitter_success_up_24h = self.twitter.post_tweet(twitter_summaries["up_24h"], image_path)
-                logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                _time.sleep(30)
-                twitter_success_down_24h = self.twitter.post_tweet(twitter_summaries["down_24h"], image_path)
-                logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                _time.sleep(30)
-                twitter_success_up_2h = self.twitter.post_tweet(twitter_summaries["up_2h"], image_path)
-                logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                _time.sleep(30)
-                twitter_success_down_2h = self.twitter.post_tweet(twitter_summaries["down_2h"], image_path)
-                
-                # Guardar timestamp de publicación exitosa
-                if twitter_success_up_24h or twitter_success_down_24h:
-                    self._save_last_publication_time()
-                
-                # Publicación extra: Cambio 2h de monedas estables (BTC, ETH, SOL, BNB, LTC)
-                try:
-                    stable_symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'LTC/USDT']
-                    stable_coins = [{'symbol': s} for s in stable_symbols]
-                    logger.info("⏱️ Generando cambios 2h de monedas estables (BTC, ETH, SOL, BNB, LTC)...")
-                    stable_enriched = self.binance.get_2hour_change(stable_coins)
-                    lines = []
-                    for coin in stable_enriched:
-                        sym = coin.get('symbol', '').replace('/USDT', '')
-                        ch2 = coin.get('change_2h', None)
-                        if ch2 is not None:
-                            arrow = '📈' if ch2 >= 0 else '📉'
-                            lines.append(f"{sym}{arrow} 2h:{ch2:+.1f}%")
-                    tweet_stables = "⏱ Cambios 2h - Estables:\n" + ("\n".join(lines) if lines else "Sin cambios disponibles")
-                    logger.info("🐦 Publicando estables 2h en Twitter...")
-                    self.twitter.post_tweet(tweet_stables.strip(), category='crypto_stable')
-                except Exception as e:
-                    logger.warning(f"⚠️ Error generando/publicando estables 2h: {e}")
-            else:
-                logger.info("\n⏭️ PASO 7: SALTADO - Cooldown activo, no se publicará en Twitter")
-
-            logger.info(f"\n📝 RESUMEN SUBIDAS 24H ({len(twitter_summaries['up_24h'])} caracteres):")
-            logger.info("-" * 60)
-            logger.info(twitter_summaries["up_24h"])
-            logger.info("-" * 60)
-            logger.info(f"\n📝 RESUMEN BAJADAS 24H ({len(twitter_summaries['down_24h'])} caracteres):")
-            logger.info("-" * 60)
-            logger.info(twitter_summaries["down_24h"])
-            logger.info("-" * 60)
-            logger.info(f"\n📝 RESUMEN SUBIDAS 2H ({len(twitter_summaries['up_2h'])} caracteres):")
-            logger.info("-" * 60)
-            logger.info(twitter_summaries["up_2h"])
-            logger.info("-" * 60)
-            logger.info(f"\n📝 RESUMEN BAJADAS 2H ({len(twitter_summaries['down_2h'])} caracteres):")
-            logger.info("-" * 60)
-            logger.info(twitter_summaries["down_2h"])
-            logger.info("-" * 60)
-
-            # Estadísticas finales
-            elapsed_time = time.time() - start_time
-            logger.info("\n" + "=" * 60)
-            logger.info("✅ CICLO COMPLETADO EXITOSAMENTE")
-            logger.info(f"⏱ Tiempo total: {elapsed_time:.2f} segundos")
-            logger.info(f"📊 Monedas analizadas: {len(coins_enriched)}")
-            logger.info(f"📱 Telegram: {'✅ Enviado' if telegram_success else '❌ Error'}")
-            logger.info(f"🐦 Twitter: {'✅ Publicado' if twitter_success_up_24h and twitter_success_down_24h and twitter_success_up_2h and twitter_success_down_2h else '⚠️ Error'}")
-
-            # Mostrar próxima ejecución
-            next_execution = datetime.now() + timedelta(hours=Config.REPORT_INTERVAL_HOURS)
-            logger.info(f"⏰ Próxima ejecución: {next_execution.strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info("=" * 60 + "\n")
-
-            return True
-
-            
-        except Exception as e:
-            logger.error(f"❌ Error en el ciclo de análisis: {e}")
-            # Mostrar próxima ejecución incluso si hay error
+    def _save_last_publication_time(self, category: str) -> None:
+        """Guarda timestamp por categoría con persistencia"""
+        with self._pub_lock:
+            self._category_last_pub[category] = time.time()
             try:
-                next_execution = datetime.now() + timedelta(hours=Config.REPORT_INTERVAL_HOURS)
-                logger.info(f"⏰ Próxima ejecución programada: {next_execution.strftime('%Y-%m-%d %H:%M:%S')}")
+                with open(self.COOLDOWN_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self._category_last_pub, f, indent=2)
             except Exception:
                 pass
+
+    def _can_publish(self, category: str) -> bool:
+        """Determina si puede publicar para una categoría según cooldown"""
+        cooldown_hours = self.COOLDOWNS.get(category, 1.0)
+        last_ts = self._category_last_pub.get(category)
+        if not last_ts:
+            return True
+        hours = (time.time() - last_ts) / 3600.0
+        return hours >= cooldown_hours
+
+    def _log_summary(self, key: str, text: str, max_lines: int = 3) -> None:
+        """Logea solo primeras líneas de un resumen"""
+        lines = text.strip().splitlines()
+        snippet = "\n".join(lines[:max_lines])
+        logger.info(f"{key}:\n{snippet}")
+
+    def health_check(self) -> Dict[str, Any]:
+        """Verifica estado de servicios y reconecta Twitter si es posible"""
+        status: Dict[str, Any] = {}
+        status["binance"] = bool(self.binance)
+        status["ai_analyzer"] = bool(self.ai_analyzer)
+        status["market_sentiment"] = bool(self.market_sentiment)
+        status["telegram"] = bool(self.telegram)
+        status["twitter"] = bool(self.twitter and getattr(self.twitter, "driver", None))
+        if self.twitter and not status["twitter"] and getattr(Config, "TWITTER_USERNAME", None) and getattr(Config, "TWITTER_PASSWORD", None):
+            try:
+                ok = self.twitter.login_twitter(Config.TWITTER_USERNAME, Config.TWITTER_PASSWORD)
+                status["twitter"] = bool(ok and getattr(self.twitter, "driver", None))
+            except Exception:
+                status["twitter"] = False
+        status["failed_services"] = list(self._failed_services)
+        return status
+
+    def _execute_analysis_steps(self) -> Dict[str, Any]:
+        """Ejecuta pasos de análisis y retorna resultados agregados"""
+        if not self.binance or not self.ai_analyzer:
+            raise self.CriticalError("Servicios críticos no disponibles")
+        perf = self.PerformanceTracker()
+        with perf.step("binance_filter"):
+            significant_coins = self.binance.filter_significant_changes()
+            if not significant_coins:
+                raise self.RecoverableError("Sin monedas significativas")
+        with perf.step("binance_2h"):
+            coins_enriched = self.binance.get_2hour_change(significant_coins)
+        with perf.step("technical_analysis"):
+            technical_signals = None
+            if self.technical_analysis:
+                technical_signals = self.technical_analysis.analyze_significant_coins(significant_coins)
+        with perf.step("market_sentiment"):
+            market_data = None
+            if self.market_sentiment:
+                market_data = self.market_sentiment.analyze_market_sentiment()
+        with perf.step("ai_analysis"):
+            ai_analysis = self.ai_analyzer.analyze_and_recommend(coins_enriched, market_data)
+        with perf.step("ai_twitter_summaries"):
+            twitter_summaries = self.ai_analyzer.generate_twitter_4_summaries(market_data, significant_coins, coins_enriched, max_chars=280)
+        summary = perf.summary()
+        logger.info("⏱ Performance por paso:")
+        for name, elapsed in summary:
+            logger.info(f"{name}: {elapsed:.2f}s")
+        return {
+            "significant_coins": significant_coins,
+            "coins_enriched": coins_enriched,
+            "technical_signals": technical_signals,
+            "market_data": market_data,
+            "ai_analysis": ai_analysis,
+            "twitter_summaries": twitter_summaries,
+        }
+
+    def _publish_twitter_batch(self, summaries: Dict[str, str], delay_seconds: int = 30) -> Dict[str, bool]:
+        """Publica resúmenes en batch con delay configurable"""
+        result = {"up_24h": False, "down_24h": False, "up_2h": False, "down_2h": False}
+        if not self.twitter:
+            return result
+        image_24h = getattr(Config, "REPORT_24H_IMAGE_PATH", None)
+        image_2h = getattr(Config, "REPORT_2H_IMAGE_PATH", None)
+        order = [("up_24h", image_24h), ("down_24h", image_24h), ("up_2h", image_2h), ("down_2h", image_2h)]
+        for key, img in order:
+            ok = self.twitter.post_tweet(summaries.get(key, ""), img)
+            result[key] = bool(ok)
+            time.sleep(delay_seconds)
+        return result
+
+    def _publish_stable_coins_2h(self) -> None:
+        """Genera y publica cambios 2h de monedas estables configuradas"""
+        if not self.binance or not self.twitter:
+            return
+        symbols = getattr(Config, "STABLE_COINS", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "LTC/USDT"])
+        stable_coins = [{"symbol": s} for s in symbols]
+        enriched = self.binance.get_2hour_change(stable_coins)
+        lines: List[str] = []
+        for coin in enriched:
+            sym = coin.get("symbol", "").replace("/USDT", "")
+            ch2 = coin.get("change_2h")
+            if ch2 is not None:
+                arrow = "📈" if ch2 >= 0 else "📉"
+                lines.append(f"{sym}{arrow} 2h:{ch2:+.1f}%")
+        content = "⏱ Cambios 2h - Cryptos estables:\n" + ("\n".join(lines) if lines else "Sin cambios disponibles")
+        self.twitter.post_tweet(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None), category="crypto_stable")
+        if self.telegram:
+            self.telegram.send_crypto_message(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None))
+
+    def _publish_results(self, results: Dict[str, Any], category: str) -> Dict[str, Any]:
+        """Publica resultados según categoría y retorna estado"""
+        status = {"telegram": False, "twitter": False}
+        can_pub = self._can_publish(category)
+        if not can_pub:
+            return status
+        twitter_summaries = results.get("twitter_summaries", {})
+        ai_analysis = results.get("ai_analysis")
+        market_data = results.get("market_data")
+        significant_coins = results.get("significant_coins", [])
+        coins_enriched = results.get("coins_enriched", [])
+        if self.telegram:
+            status["telegram"] = bool(self.telegram.send_report(ai_analysis, market_data, significant_coins, coins_enriched))
+        tw = self._publish_twitter_batch(twitter_summaries, delay_seconds=30)
+        status["twitter"] = all(tw.values())
+        if status["twitter"]:
+            self._save_last_publication_time(category)
+        if category == "stable_coins":
+            self._publish_stable_coins_2h()
+        return status
+
+    def run_analysis_cycle(self, category: str = "market_analysis", max_retries: int = 3, dry_run: bool = False, is_morning: bool = False) -> bool:
+        """Ejecuta ciclo de análisis con reintentos y publicación separada"""
+        hc = self.health_check()
+        if not hc.get("binance") or not hc.get("ai_analyzer"):
+            logger.error("❌ Servicios críticos no disponibles")
             return False
-    
-    def setup_twitter_login(self, username: str, password: str):
-        """
-        Configura el login de Twitter (se hace una sola vez).
-        
-        Args:
-            username: Usuario de Twitter
-            password: Contraseña de Twitter
-        """
-        try:
-            logger.info("🐦 Configurando login de Twitter...")
-            success = self.twitter.login_twitter(username, password)
-            
-            if success:
-                logger.info("✅ Twitter configurado correctamente")
-            else:
-                logger.error("❌ Error al configurar Twitter")
-            
-            return success
-        except Exception as e:
-            logger.error(f"❌ Error al configurar Twitter: {e}")
+        backoffs = [30, 60, 120]
+        attempt = 0
+        if self.ai_analyzer:
+            self.ai_analyzer.reset_cycle_status()
+        while attempt < max_retries:
+            attempt += 1
+            try:
+                logger.info(f"🚀 Inicio ciclo análisis {category} intento {attempt}")
+                results = self._execute_analysis_steps()
+                if is_morning and self.tradingview_news:
+                    try:
+                        self.tradingview_news.publish_morning_report(self.telegram, self.twitter)
+                    except Exception:
+                        pass
+                if dry_run:
+                    logger.info("🧪 Dry-run activo, no se publica")
+                    return True
+                pub = self._publish_results(results, category)
+                self._log_summary("Resumen up_24h", results["twitter_summaries"].get("up_24h", ""), max_lines=3)
+                self._log_summary("Resumen down_24h", results["twitter_summaries"].get("down_24h", ""), max_lines=3)
+                self._log_summary("Resumen up_2h", results["twitter_summaries"].get("up_2h", ""), max_lines=3)
+                self._log_summary("Resumen down_2h", results["twitter_summaries"].get("down_2h", ""), max_lines=3)
+                next_execution = datetime.now() + timedelta(hours=Config.REPORT_INTERVAL_HOURS)
+                logger.info(f"⏰ Próxima ejecución: {next_execution.strftime('%Y-%m-%d %H:%M:%S')}")
+                if self.ai_analyzer and self.ai_analyzer.get_cycle_status():
+                    logger.info("✅ Conexión con proveedores IA: OK")
+                else:
+                    logger.info("❌ Conexión con proveedores IA: FALLIDA")
+                return bool(pub["telegram"] or pub["twitter"])
+            except self.RecoverableError as e:
+                if attempt >= max_retries:
+                    logger.error(f"❌ Error recuperable agotó reintentos: {e}")
+                    logger.info("❌ Conexión con proveedores IA: FALLIDA")
+                    return False
+                delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
+                logger.warning(f"⚠️ Error recuperable: {e}. Reintentando en {delay}s")
+                time.sleep(delay)
+                continue
+            except self.CriticalError as e:
+                logger.error(f"❌ Error crítico: {e}")
+                logger.info("❌ Conexión con proveedores IA: FALLIDA")
+                return False
+            except Exception as e:
+                if attempt >= max_retries:
+                    logger.error(f"❌ Error inesperado: {e}")
+                    logger.info("❌ Conexión con proveedores IA: FALLIDA")
+                    return False
+                delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
+                logger.warning(f"⚠️ Error inesperado: {e}. Reintentando en {delay}s")
+                time.sleep(delay)
+                continue
+
+    def setup_twitter_login(self, username: str, password: str) -> bool:
+        """Configura login de Twitter"""
+        if not self.twitter:
             return False
-    
-    def cleanup(self):
-        """Limpia recursos y cierra conexiones"""
-        logger.info("🧹 Limpiando recursos...")
         try:
-            self.twitter.close()
-            logger.info("✅ Recursos liberados")
-        except Exception as e:
-            logger.warning(f"⚠️ Error al limpiar recursos: {e}")
+            return bool(self.twitter.login_twitter(username, password))
+        except Exception:
+            return False
+
+    def cleanup(self) -> None:
+        """Cierra recursos"""
+        try:
+            if self.twitter:
+                self.twitter.close()
+        except Exception:
+            pass
+
+class _PerfCtx:
+    def __init__(self, end_cb):
+        self._end = end_cb
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        self._end()

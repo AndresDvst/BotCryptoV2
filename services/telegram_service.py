@@ -3,8 +3,11 @@
 Servicio para enviar mensajes a Telegram.
 Envía reportes y análisis al bot de Telegram configurado.
 """
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
-from typing import Dict
 from config.config import Config
 from utils.logger import logger
 
@@ -36,6 +39,12 @@ class TelegramService:
         self.token_signals = Config.TELEGRAM_BOT_SIGNALS
         self.url_signals = f"https://api.telegram.org/bot{self.token_signals}" if self.token_signals else None
         
+        self._session = requests.Session()
+        self._base_delay = 1.0
+        self._max_attempts = 3
+        self._text_limit = 4096
+        self._caption_limit = 1024
+        
         logger.info(f"✅ Servicio de Telegram inicializado (Chat ID: {self.chat_id})")
         logger.info(f"   - Bot Crypto: {'✅' if self.token_crypto else '❌'}")
         logger.info(f"   - Bot Markets: {'✅' if self.token_markets else '⚠️ (Usará Crypto)'}")
@@ -48,30 +57,91 @@ class TelegramService:
             base_url = self.url_crypto
             
         try:
-            if len(message) > 4096:
-                logger.warning("⚠️ Mensaje muy largo, se truncará")
-                message = message[:4093] + "..."
+            if len(message) > self._text_limit:
+                chunks = self._split_text_by_lines(message, self._text_limit)
+            else:
+                chunks = [message]
             
             url = f"{base_url}/sendMessage"
-            payload = {
-                'chat_id': self._resolve_chat_id(parse_mode),
-                'text': message,
-                'parse_mode': parse_mode,
-                'disable_web_page_preview': False
-            }
-            
-            response = requests.post(url, json=payload, timeout=10)
-            
-            if response.status_code == 200:
-                return True
-            else:
-                logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
+            chat_id = self._resolve_chat_id(parse_mode, 'crypto')
+            if not chat_id:
+                logger.error("❌ No hay chat/grupo válido para enviar mensaje")
                 return False
+            for chunk in chunks:
+                payload = {
+                    'chat_id': chat_id,
+                    'text': chunk,
+                    'parse_mode': parse_mode,
+                    'disable_web_page_preview': False
+                }
+                response = self._post_with_retries(url, json=payload, timeout=12)
+                if response.status_code != 200:
+                    logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
+                    return False
+            return True
         except Exception as e:
             logger.error(f"❌ Excepción Telegram: {e}")
             return False
 
-    def _resolve_chat_id(self, parse_mode: str = "HTML", bot_type: str = 'crypto') -> str:
+    def _post_with_retries(self, url: str, json: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, files: Optional[Dict[str, Any]] = None, timeout: int = 10) -> requests.Response:
+        attempts = self._max_attempts
+        last_error: Optional[Exception] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._session.post(url, json=json, data=data, files=files, timeout=timeout)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after and str(retry_after).isdigit() else self._base_delay * (2 ** (attempt - 1))
+                    logger.warning(f"⚠️ Rate limit (429). Esperando {delay:.1f}s antes de reintentar")
+                    time.sleep(delay)
+                    last_error = RuntimeError(f"429: {response.text}")
+                    continue
+                if response.status_code >= 500:
+                    delay = self._base_delay * (2 ** (attempt - 1))
+                    logger.warning(f"⚠️ Error {response.status_code}. Reintento en {delay:.1f}s")
+                    time.sleep(delay)
+                    last_error = RuntimeError(f"{response.status_code}: {response.text}")
+                    continue
+                return response
+            except Exception as e:
+                last_error = e
+                delay = self._base_delay * (2 ** (attempt - 1))
+                if attempt < attempts:
+                    logger.warning(f"⚠️ Error de red: {e}. Reintento en {delay:.1f}s")
+                    time.sleep(delay)
+        if last_error:
+            raise last_error
+        return self._session.post(url, json=json, data=data, files=files, timeout=timeout)
+
+    def _split_text_by_lines(self, text: str, limit: int) -> List[str]:
+        lines = text.splitlines(keepends=True)
+        chunks: List[str] = []
+        current = ""
+        for line in lines:
+            if len(current) + len(line) <= limit:
+                current += line
+            else:
+                if current:
+                    chunks.append(current)
+                current = line
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _split_text_two_parts(self, text: str, first_limit: int, second_limit: int) -> Tuple[str, str]:
+        if len(text) <= first_limit:
+            return text, ""
+        prefix1 = "1/2 "
+        prefix2 = "2/2 "
+        first_chunks = self._split_text_by_lines(text, first_limit - len(prefix1))
+        part1 = (prefix1 + first_chunks[0].rstrip()) if first_chunks else prefix1
+        remaining_text = "".join(first_chunks[1:]).lstrip("\n") if first_chunks else text
+        remaining_chunks = self._split_text_by_lines(remaining_text, second_limit - len(prefix2))
+        part2_base = remaining_chunks[0].rstrip() if remaining_chunks else remaining_text[: max(0, second_limit - len(prefix2))]
+        part2 = prefix2 + part2_base if part2_base else ""
+        return part1, part2
+
+    def _resolve_chat_id(self, parse_mode: str = "HTML", bot_type: str = 'crypto') -> Optional[str]:
         """
         Resuelve el ID del chat destino.
         STRICT MODE: Solo devuelve grupos si están configurados.
@@ -79,31 +149,41 @@ class TelegramService:
         if bot_type == 'markets':
             if self.group_markets:
                 return self.group_markets
-            logger.warning("⚠️ TELEGRAM_GROUP_MARKETS no configurado. Se omite envío para evitar chat privado.")
+            if self.chat_id_markets:
+                return self.chat_id_markets
+            logger.warning("⚠️ TELEGRAM_GROUP_MARKETS no configurado y TELEGRAM_CHAT_ID_MARKETS vacío.")
             return None
             
         if bot_type == 'signals':
             if self.group_signals:
                 return self.group_signals
-            logger.warning("⚠️ TELEGRAM_GROUP_SIGNALS no configurado. Se omite envío para evitar chat privado.")
+            if self.chat_id_signals:
+                return self.chat_id_signals
+            logger.warning("⚠️ TELEGRAM_GROUP_SIGNALS no configurado y TELEGRAM_CHAT_ID_SIGNALS vacío.")
             return None
             
         # Crypto (Default)
         if self.group_crypto:
             return self.group_crypto
-        logger.warning("⚠️ TELEGRAM_GROUP_CRYPTO no configurado. Se omite envío para evitar chat privado.")
+        if self.chat_id_crypto:
+            return self.chat_id_crypto
+        logger.warning("⚠️ TELEGRAM_GROUP_CRYPTO no configurado y TELEGRAM_CHAT_ID_CRYPTO vacío.")
         return None
 
-    def send_message(self, message: str, parse_mode: str = "HTML", bot_type: str = 'crypto', chat_id: str = None) -> bool:
-        """
-        Envía mensaje al bot especificado.
-        bot_type: 'crypto', 'markets', 'signals'
-        """
+    def _get_target_url(self, bot_type: str) -> str:
         target_url = self.url_crypto
         if bot_type == 'markets' and self.url_markets:
             target_url = self.url_markets
         elif bot_type == 'signals' and self.url_signals:
             target_url = self.url_signals
+        return target_url or self.url_crypto
+
+    def send_message(self, message: str, parse_mode: str = "HTML", bot_type: str = 'crypto', chat_id: Optional[str] = None) -> bool:
+        """
+        Envía mensaje al bot especificado.
+        bot_type: 'crypto', 'markets', 'signals'
+        """
+        target_url = self._get_target_url(bot_type)
             
         # Resolver chat id por tipo (o usar el proporcionado)
         target_chat_id = chat_id or self._resolve_chat_id(parse_mode, bot_type)
@@ -113,14 +193,49 @@ class TelegramService:
             return False
         
         try:
-            url = f"{target_url or self.url_crypto}/sendMessage"
-            payload = {
+            url = f"{target_url}/sendMessage"
+            chunks = self._split_text_by_lines(message, self._text_limit) if len(message) > self._text_limit else [message]
+            for chunk in chunks:
+                payload = {
+                    'chat_id': target_chat_id,
+                    'text': chunk,
+                    'parse_mode': parse_mode,
+                    'disable_web_page_preview': False
+                }
+                response = self._post_with_retries(url, json=payload, timeout=12)
+                if response.status_code != 200:
+                    logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"❌ Excepción Telegram: {e}")
+            return False
+
+    def send_photo(self, image_path: str, caption: Optional[str] = None, parse_mode: str = "HTML", bot_type: str = 'crypto', chat_id: Optional[str] = None) -> bool:
+        if not image_path or not os.path.exists(image_path):
+            logger.warning(f"⚠️ Imagen no encontrada: {image_path}")
+            return False
+        
+        target_url = self._get_target_url(bot_type)
+        target_chat_id = chat_id or self._resolve_chat_id(parse_mode, bot_type)
+        
+        if not target_chat_id:
+            logger.error(f"❌ No se pudo determinar un Target Group ID para {bot_type}. El envío ha sido bloqueado por seguridad (No Private Chat).")
+            return False
+        
+        try:
+            url = f"{target_url}/sendPhoto"
+            data = {
                 'chat_id': target_chat_id,
-                'text': message[:4093] + "..." if len(message) > 4096 else message,
-                'parse_mode': parse_mode,
-                'disable_web_page_preview': False
+                'parse_mode': parse_mode
             }
-            response = requests.post(url, json=payload, timeout=10)
+            if caption:
+                data['caption'] = caption[: self._caption_limit - 3] + "..." if len(caption) > self._caption_limit else caption
+            
+            with open(image_path, 'rb') as photo:
+                files = {'photo': photo}
+                response = self._post_with_retries(url, data=data, files=files, timeout=30)
+            
             if response.status_code == 200:
                 return True
             else:
@@ -137,19 +252,45 @@ class TelegramService:
         except Exception:
             return True
 
-    def send_crypto_message(self, message: str) -> bool:
+    def send_crypto_message(self, message: str, image_path: Optional[str] = None) -> bool:
         """Envía mensaje al Bot de Crypto"""
+        if image_path:
+            part1, part2 = self._split_text_two_parts(message, self._caption_limit, self._text_limit)
+            if part2:
+                sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
+                if not sent:
+                    return False
+                return self.send_message(part2, bot_type='crypto')
+            return self.send_photo(image_path, caption=message, bot_type='crypto')
+        part1, part2 = self._split_text_two_parts(message, self._text_limit, self._text_limit)
+        if part2:
+            return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
         return self.send_message(message, bot_type='crypto')
 
-    def send_market_message(self, message: str) -> bool:
+    def send_market_message(self, message: str, image_path: Optional[str] = None) -> bool:
         """Envía mensaje al Bot de Mercados"""
+        if image_path:
+            return self.send_photo(image_path, caption=message, bot_type='markets')
         return self.send_message(message, bot_type='markets')
 
-    def send_signal_message(self, message: str) -> bool:
+    def send_signal_message(self, message: str, image_path: Optional[str] = None) -> bool:
         """Envía mensaje al Bot de Señales"""
+        if image_path is None:
+            image_path = Config.SIGNALS_IMAGE_PATH
+        if image_path:
+            part1, part2 = self._split_text_two_parts(message, self._caption_limit, self._text_limit)
+            if part2:
+                sent = self.send_photo(image_path, caption=part1, bot_type='signals')
+                if not sent:
+                    return False
+                return self.send_message(part2, bot_type='signals')
+            return self.send_photo(image_path, caption=message, bot_type='signals')
+        part1, part2 = self._split_text_two_parts(message, self._text_limit, self._text_limit)
+        if part2:
+            return self.send_message(part1, bot_type='signals') and self.send_message(part2, bot_type='signals')
         return self.send_message(message, bot_type='signals')
     
-    def send_report(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: list, coins_both_enriched: list) -> bool:
+    def send_report(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: List[Dict], coins_both_enriched: List[Dict]) -> bool:
         """
         Envía un reporte completo formateado a Telegram.
         
@@ -165,8 +306,19 @@ class TelegramService:
             # Crear el mensaje formateado
             message = self._format_report(analysis, market_sentiment, coins_only_binance, coins_both_enriched)
             
-            # Enviar el mensaje
-            return self.send_message(message)
+            image_path = Config.REPORT_24H_IMAGE_PATH or Config.REPORT_2H_IMAGE_PATH
+            if image_path:
+                part1, part2 = self._split_text_two_parts(message, self._caption_limit, self._text_limit)
+                if part2:
+                    sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
+                    if not sent:
+                        return False
+                    return self.send_message(part2, bot_type='crypto')
+                return self.send_photo(image_path, caption=message, bot_type='crypto')
+            part1, part2 = self._split_text_two_parts(message, self._text_limit, self._text_limit)
+            if part2:
+                return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
+            return self.send_message(message, bot_type='crypto')
             
         except Exception as e:
             logger.error(f"❌ Error al enviar reporte: {e}")

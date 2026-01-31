@@ -1,59 +1,121 @@
 """
-Servicio de análisis con IA utilizando Google Gemini.
+Servicio de análisis con IA utilizando múltiples proveedores (Gemini, OpenAI, OpenRouter).
 Analiza los datos del mercado y genera recomendaciones.
 """
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
-import google.generativeai as genai
-import openai
-from typing import Dict, List, Optional
+
 import concurrent.futures
-from config.config import Config
-from utils.logger import logger
+import hashlib
 import json
 import re
+import time
+import warnings
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import google.generativeai as genai
+import openai
+
+from config.config import Config
+from utils.logger import logger
+
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+
+
+@dataclass
+class AIAnalyzerConfig:
+    """Configuración del servicio de análisis con IA."""
+
+    DEFAULT_TIMEOUT: int = 30
+    CACHE_TTL: int = 300
+    MAX_COINS_IN_PROMPT: int = 10
+    GEMINI_TEMPERATURE: float = 0.7
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
 
 class AIAnalyzerService:
 
-    def __init__(self):
-        self.active_provider = None # 'gemini' o 'openai'
-        self.gemini_model = None
-        self.openai_client = None
-        
-        # Configurar Gemini
-        try:
-            genai.configure(api_key=Config.GOOGLE_GEMINI_API_KEY)
-            self.generation_config = {
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "top_k": 40,
-                "max_output_tokens": 2048,
-            }
-            self.safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-            ]
-            self.gemini_model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
-                generation_config=self.generation_config,
-                safety_settings=self.safety_settings
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Error al configurar Gemini: {e}")
+    def __init__(self, config: Optional[AIAnalyzerConfig] = None) -> None:
+        self.config = config or AIAnalyzerConfig()
 
-        # Configurar OpenAI
-        try:
-            if Config.OPENAI_API_KEY:
-                self.openai_client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
-        except Exception as e:
-            logger.warning(f"⚠️ Error al configurar OpenAI: {e}")
+        self.active_provider: Optional[str] = None
+        self._cycle_provider_ok: bool = False
+        self.gemini_model: Optional[Any] = None
+        self.openai_client: Optional[Any] = None
+        self.openrouter_client: Optional[Any] = None
+        self.openrouter_model: str = "tngtech/deepseek-r1t2-chimera:free"
 
-        # Probar y seleccionar el mejor proveedor
+        self._providers: Dict[str, Any] = {}
+
+        self._metrics: Dict[str, Dict[str, Any]] = {
+            "requests": defaultdict(int),
+            "failures": defaultdict(int),
+            "total_time": defaultdict(float),
+        }
+
+        self._cache: Dict[str, Any] = {}
+        self._cache_timestamps: Dict[str, float] = {}
+
+        self._timeout: int = self.config.DEFAULT_TIMEOUT
+        self._cache_ttl: int = self.config.CACHE_TTL
+
+        try:
+            api_key = getattr(Config, "GOOGLE_GEMINI_API_KEY", "") or ""
+            if api_key.strip():
+                genai.configure(api_key=api_key)
+                generation_config = {
+                    "temperature": self.config.GEMINI_TEMPERATURE,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 2048,
+                }
+                safety_settings = [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+                    },
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                ]
+                self.gemini_model = genai.GenerativeModel(
+                    model_name="gemini-2.5-flash",
+                    generation_config=generation_config,
+                    safety_settings=safety_settings,
+                )
+                self._providers["gemini"] = self.gemini_model
+            else:
+                logger.debug("Google Gemini API key no configurada")
+        except Exception as e:
+            logger.debug("Error al configurar Gemini")
+
+        try:
+            api_key = getattr(Config, "OPENAI_API_KEY", "") or ""
+            if api_key.strip():
+                self.openai_client = openai.OpenAI(api_key=api_key)
+                self._providers["openai"] = self.openai_client
+            else:
+                logger.debug("OpenAI API key no configurada")
+        except Exception as e:
+            logger.debug("Error al configurar OpenAI")
+
+        try:
+            api_key = getattr(Config, "OPENROUTER_API_KEY", "") or ""
+            if api_key.strip():
+                self.openrouter_client = openai.OpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                )
+                self._providers["openrouter"] = self.openrouter_client
+            else:
+                logger.debug("OpenRouter API key no configurada")
+        except Exception as e:
+            logger.debug("Error al configurar OpenRouter")
+
         self.check_best_provider()
 
-    def _run_with_timeout(self, fn, timeout_seconds: int):
+    def _run_with_timeout(self, fn: Callable[[], Any], timeout_seconds: int) -> Any:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(fn)
@@ -61,7 +123,104 @@ class AIAnalyzerService:
         except Exception as e:
             return e
 
-    def _test_gemini(self):
+    def _is_quota_error(self, e: Exception) -> bool:
+        s = str(e).lower()
+        return "429" in s or "rate limit" in s or "insufficient_quota" in s or "quota" in s
+
+    def _get_provider_priority_list(self) -> List[str]:
+        available: List[str] = []
+        if self.gemini_model:
+            available.append("gemini")
+        if self.openai_client:
+            available.append("openai")
+        if self.openrouter_client:
+            available.append("openrouter")
+
+        if not available:
+            return []
+
+        providers: List[str] = []
+        if self.active_provider in available:
+            providers.append(self.active_provider)  # type: ignore[arg-type]
+        providers.extend(p for p in available if p not in providers)
+        return providers
+
+    def _call_provider(self, provider: str, prompt: str, max_tokens: int = 2048) -> str:
+        start = time.time()
+        self._metrics["requests"][provider] += 1
+
+        def _call() -> str:
+            if provider == "gemini":
+                if not self.gemini_model:
+                    raise RuntimeError("Gemini no configurado")
+                response = self.gemini_model.generate_content(prompt)
+                text = getattr(response, "text", "") or ""
+                if not text:
+                    raise RuntimeError("Respuesta vacía de Gemini")
+                return text
+
+            if provider == "openai":
+                if not self.openai_client:
+                    raise RuntimeError("OpenAI no configurado")
+                response = self.openai_client.chat.completions.create(
+                    model=self.config.OPENAI_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    timeout=self._timeout,
+                )
+                if not response.choices:
+                    raise RuntimeError("Respuesta vacía de OpenAI")
+                return response.choices[0].message.content or ""
+
+            if provider == "openrouter":
+                if not self.openrouter_client:
+                    raise RuntimeError("OpenRouter no configurado")
+                response = self.openrouter_client.chat.completions.create(
+                    model=self.openrouter_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    timeout=self._timeout,
+                )
+                if not response.choices:
+                    raise RuntimeError("Respuesta vacía de OpenRouter")
+                return response.choices[0].message.content or ""
+
+            raise RuntimeError("Proveedor inválido")
+
+        result = self._run_with_timeout(_call, timeout_seconds=self._timeout)
+        if isinstance(result, Exception):
+            self._metrics["failures"][provider] += 1
+            raise result
+
+        elapsed = time.time() - start
+        self._metrics["total_time"][provider] += elapsed
+        return str(result)
+
+    def _call_with_fallback(self, prompt: str, max_tokens: int = 2048) -> Tuple[str, Optional[str]]:
+        providers = self._get_provider_priority_list()
+        if not providers:
+            return "", None
+
+        last_error: Optional[Exception] = None
+        for provider in providers:
+            try:
+                text = self._call_provider(provider, prompt, max_tokens=max_tokens)
+                self._cycle_provider_ok = True
+                return text, provider
+            except Exception as e:
+                last_error = e
+                if not self._is_quota_error(e):
+                    logger.debug("Fallo generando contenido")
+
+        return "", None
+
+    def reset_cycle_status(self) -> None:
+        self._cycle_provider_ok = False
+
+    def get_cycle_status(self) -> bool:
+        return self._cycle_provider_ok
+
+    def _test_gemini(self) -> Any:
         if not self.gemini_model:
             return RuntimeError("Gemini no configurado")
         response = self.gemini_model.generate_content("Hola")
@@ -69,79 +228,163 @@ class AIAnalyzerService:
             return RuntimeError("Respuesta vacía de Gemini")
         return True
 
-    def _test_openai(self):
+    def _test_openai(self) -> Any:
         if not self.openai_client:
             return RuntimeError("OpenAI no configurado")
         response = self.openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=self.config.OPENAI_MODEL,
             messages=[{"role": "user", "content": "Hola"}],
-            max_tokens=5
+            max_tokens=5,
+            timeout=self._timeout,
         )
         if not response.choices:
             return RuntimeError("Respuesta vacía de OpenAI")
         return True
 
-    def check_best_provider(self):
-        """Verifica qué API responde y selecciona la activa para este ciclo"""
-        logger.info("🔄 Verificando disponibilidad de IAs...")
-        
+    def _test_openrouter(self) -> Any:
+        if not self.openrouter_client:
+            return RuntimeError("OpenRouter no configurado")
+        response = self.openrouter_client.chat.completions.create(
+            model=self.openrouter_model,
+            messages=[{"role": "user", "content": "Hola"}],
+            max_tokens=5,
+            timeout=self._timeout,
+        )
+        if not response.choices:
+            return RuntimeError("Respuesta vacía de OpenRouter")
+        return True
+
+    def check_best_provider(self) -> None:
+        """Verifica qué API responde y selecciona la activa para este ciclo."""
         # 1. Probar Gemini
         try:
             if self.gemini_model:
-                logger.info("🧪 Probando Gemini...")
                 result = self._run_with_timeout(self._test_gemini, timeout_seconds=6)
                 if result is True:
                     self.active_provider = 'gemini'
-                    logger.info("✅ Gemini ACTIVO y seleccionado.")
                     return
                 if isinstance(result, Exception):
                     raise result
         except Exception as e:
-            logger.warning(f"⚠️ Gemini falló la prueba: {e}")
+            if not self._is_quota_error(e):
+                logger.debug("Gemini no disponible")
 
         # 2. Probar OpenAI (Fallback)
         try:
             if self.openai_client:
-                logger.info("🧪 Probando OpenAI...")
                 result = self._run_with_timeout(self._test_openai, timeout_seconds=6)
                 if result is True:
                     self.active_provider = 'openai'
-                    logger.info("✅ OpenAI ACTIVO y seleccionado.")
                     return
                 if isinstance(result, Exception):
                     raise result
         except Exception as e:
-            logger.warning(f"⚠️ OpenAI falló la prueba: {e}")
+            if not self._is_quota_error(e):
+                logger.debug("OpenAI no disponible")
+
+        # 3. Probar OpenRouter (Fallback)
+        try:
+            if self.openrouter_client:
+                result = self._run_with_timeout(self._test_openrouter, timeout_seconds=6)
+                if result is True:
+                    self.active_provider = 'openrouter'
+                    return
+                if isinstance(result, Exception):
+                    raise result
+        except Exception as e:
+            if not self._is_quota_error(e):
+                logger.debug("OpenRouter no disponible")
             
-        logger.error("❌ NINGUNA IA DISPONIBLE. El bot funcionará sin análisis inteligente.")
         self.active_provider = None
 
-    def _generate_content(self, prompt: str) -> str:
-        """Genera contenido usando el proveedor activo"""
-        if self.active_provider == 'gemini':
+    def _generate_content(self, prompt: str, max_tokens: int = 2048) -> str:
+        text, _ = self._call_with_fallback(prompt, max_tokens=max_tokens)
+        return text
+
+    def _simplify_coins(self, coins: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        simplified: List[Dict[str, Any]] = []
+        for coin in coins[: self.config.MAX_COINS_IN_PROMPT]:
+            symbol = str(coin.get("symbol", ""))
+            price = coin.get("price")
+            change_24h = coin.get("change_24h")
+            volume = coin.get("volume_24h") or coin.get("quoteVolume") or coin.get("volume")
+
+            clean: Dict[str, Any] = {"symbol": symbol}
+
+            if isinstance(price, (int, float)):
+                clean["price"] = round(float(price), 6)
+            if isinstance(change_24h, (int, float)):
+                clean["change_24h"] = round(float(change_24h), 3)
+            if isinstance(volume, (int, float)):
+                clean["volume"] = float(volume)
+
+            simplified.append(clean)
+
+        return simplified
+
+    def _get_cache_key(self, *parts: str) -> str:
+        raw = "||".join(parts)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _is_cache_valid(self, key: str) -> bool:
+        ts = self._cache_timestamps.get(key)
+        if ts is None:
+            return False
+        return (time.time() - ts) < self._cache_ttl
+
+    def _extract_json_safe(self, text: str, expect: str = "object") -> Any:
+        if not text:
+            return [] if expect == "list" else {}
+
+        cleaned = text.strip().replace("\r", "")
+        cleaned = cleaned.replace("```json", "```")
+
+        if "```" in cleaned:
+            parts = cleaned.split("```")
+            if len(parts) >= 3:
+                cleaned = parts[1]
+            else:
+                cleaned = cleaned.replace("```", "")
+
+        obj_match = re.search(r"\{.*?\}", cleaned, re.DOTALL)
+        list_match = re.search(r"\[.*?\]", cleaned, re.DOTALL)
+
+        candidates: List[str] = []
+        if expect == "list":
+            if list_match:
+                candidates.append(list_match.group(0))
+        elif expect == "object":
+            if obj_match:
+                candidates.append(obj_match.group(0))
+        else:
+            if obj_match:
+                candidates.append(obj_match.group(0))
+            if list_match:
+                candidates.append(list_match.group(0))
+
+        for candidate in candidates:
             try:
-                response = self.gemini_model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                logger.error(f"❌ Error generando con Gemini: {e}")
-                # Intentar switch a OpenAI si falla en runtime
-                if self.openai_client:
-                    self.active_provider = 'openai'
-                    return self._generate_content(prompt)
-                return ""
-                
-        elif self.active_provider == 'openai':
-            try:
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini", # Usamos gpt-4o-mini por ser rápido y eficiente (text-embedding no genera texto)
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"❌ Error generando con OpenAI: {e}")
-                return ""
-        
-        return ""
+                parsed = json.loads(candidate)
+                if expect == "list" and isinstance(parsed, list):
+                    return parsed
+                if expect == "object" and isinstance(parsed, dict):
+                    return parsed
+                if expect == "any":
+                    return parsed
+            except Exception:
+                continue
+
+        return [] if expect == "list" else {}
+
+    def _format_coins_for_tweet(self, coins: List[Dict[str, Any]], trend_emoji: str, change_key: str) -> List[str]:
+        lines: List[str] = []
+        for coin in coins:
+            change = coin.get(change_key, 0)
+            if not isinstance(change, (int, float)) or abs(change) <= 0.0:
+                continue
+            symbol = str(coin.get("symbol", "N/A")).replace("/USDT", "").replace("/usdt", "")
+            lines.append(f"{symbol}{trend_emoji} {change:+.1f}%")
+        return lines
 
     def generate_twitter_4_summaries(self, market_sentiment: Dict, coins_only_binance: list, coins_both_enriched: list, max_chars: int = 280) -> dict:
         """
@@ -153,70 +396,55 @@ class AIAnalyzerService:
         """
         sentiment = market_sentiment.get('overall_sentiment', 'Análisis')
         emoji = market_sentiment.get('sentiment_emoji', '📊')
-        # 1. Top subidas 24h (sin cambio 2h, hasta 15 criptos)
+
         coins_up_24h = [coin for coin in coins_only_binance if coin.get('change_24h', 0) > 10 and abs(coin.get('change_24h', 0)) > 0.0]
-        coins_up_sorted = sorted(coins_up_24h, key=lambda c: c.get('change_24h', 0), reverse=True)
-        up_lines = []
-        for coin in coins_up_sorted[:15]:
-            change_24h = coin.get('change_24h', 0)
-            if abs(change_24h) > 0.0:
-                symbol = coin.get('symbol', 'N/A').replace('/USDT', '').replace('/usdt', '')
-                up_lines.append(f"{symbol}📈 {change_24h:+.1f}%")
-        tweet_up_24h = f"{emoji} Top subidas últimas 24h (>10%):\n" + ("\n".join(up_lines) if up_lines else "Ninguna moneda subió más de 10%")
+        coins_up_sorted = sorted(coins_up_24h, key=lambda c: c.get('change_24h', 0), reverse=True)[:14]
+        up_lines = self._format_coins_for_tweet(coins_up_sorted, '📈', 'change_24h')
+        tweet_up_24h = f"{emoji} Top subidas de Cryptos últimas 24h (>10%):\n" + ("\n".join(up_lines) if up_lines else "Ninguna moneda subió más de 10%")
         tweet_up_24h = tweet_up_24h.strip()[:max_chars]
 
-        # 2. Top bajadas 24h (sin cambio 2h, hasta 15 criptos)
         coins_down_24h = [coin for coin in coins_only_binance if coin.get('change_24h', 0) < -10 and abs(coin.get('change_24h', 0)) > 0.0]
-        coins_down_sorted = sorted(coins_down_24h, key=lambda c: c.get('change_24h', 0))
-        down_lines = []
-        for coin in coins_down_sorted[:15]:
-            change_24h = coin.get('change_24h', 0)
-            if abs(change_24h) > 0.0:
-                symbol = coin.get('symbol', 'N/A').replace('/USDT', '').replace('/usdt', '')
-                down_lines.append(f"{symbol}📉 {change_24h:+.1f}%")
-        tweet_down_24h = f"{emoji} Top bajadas últimas 24h (<-10%):\n" + ("\n".join(down_lines) if down_lines else "Ninguna moneda bajó más de 10%")
+        coins_down_sorted = sorted(coins_down_24h, key=lambda c: c.get('change_24h', 0))[:14]
+        down_lines = self._format_coins_for_tweet(coins_down_sorted, '📉', 'change_24h')
+        tweet_down_24h = f"{emoji} Top bajadas de Cryptos últimas 24h (<-10%):\n" + ("\n".join(down_lines) if down_lines else "Ninguna moneda bajó más de 10%")
         tweet_down_24h = tweet_down_24h.strip()[:max_chars]
 
 
-        # 3. Subidas 2h para las del top subidas 24h (si hay dato 2h, si no, top 2h general)
         coins_2h_lookup = {coin['symbol']: coin for coin in coins_both_enriched} if coins_both_enriched else {}
         up_2h_lines = []
-        for coin in coins_up_sorted[:10]:
+        for coin in coins_up_sorted[:14]:
             symbol = coin.get('symbol', 'N/A')
             coin_2h = coins_2h_lookup.get(symbol)
             if coin_2h and coin_2h.get('change_2h') is not None and abs(coin_2h.get('change_2h')) > 0.0:
                 change_2h = coin_2h.get('change_2h')
                 up_2h_lines.append(f"{symbol.replace('/USDT','').replace('/usdt','')}📈 2h:{change_2h:+.1f}%")
-        # Si no hay ninguna, mostrar top 10 subidas 2h de coins_both_enriched
         if not up_2h_lines and coins_both_enriched:
             coins_up_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) > 0 and abs(coin.get('change_2h', 0)) > 0.0]
             coins_up_2h_sorted = sorted(coins_up_2h, key=lambda c: c.get('change_2h', 0), reverse=True)
-            for coin in coins_up_2h_sorted[:10]:
+            for coin in coins_up_2h_sorted[:14]:
                 change_2h = coin.get('change_2h', 0)
                 if abs(change_2h) > 0.0:
                     symbol = coin.get('symbol', 'N/A').replace('/USDT','').replace('/usdt','')
                     up_2h_lines.append(f"{symbol}📈 2h:{change_2h:+.1f}%")
-        tweet_up_2h = f"{emoji} Top subidas últimas 2h:\n" + ("\n".join(up_2h_lines) if up_2h_lines else "Ninguna moneda subió en 2h")
+        tweet_up_2h = f"{emoji} Top subidas de Cryptos últimas 2h:\n" + ("\n".join(up_2h_lines) if up_2h_lines else "Ninguna moneda subió en 2h")
         tweet_up_2h = tweet_up_2h.strip()[:max_chars]
 
-        # 4. Bajadas 2h para las del top bajadas 24h (si hay dato 2h, si no, top 2h general)
         down_2h_lines = []
-        for coin in coins_down_sorted[:15]:
+        for coin in coins_down_sorted[:14]:
             symbol = coin.get('symbol', 'N/A')
             coin_2h = coins_2h_lookup.get(symbol)
             if coin_2h and coin_2h.get('change_2h') is not None and abs(coin_2h.get('change_2h')) > 0.0:
                 change_2h = coin_2h.get('change_2h')
                 down_2h_lines.append(f"{symbol.replace('/USDT','').replace('/usdt','')}📉 2h:{change_2h:+.1f}%")
-        # Si no hay ninguna, mostrar top 15 bajadas 2h de coins_both_enriched
         if not down_2h_lines and coins_both_enriched:
             coins_down_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) < 0 and abs(coin.get('change_2h', 0)) > 0.0]
             coins_down_2h_sorted = sorted(coins_down_2h, key=lambda c: c.get('change_2h', 0))
-            for coin in coins_down_2h_sorted[:15]:
+            for coin in coins_down_2h_sorted[:14]:
                 change_2h = coin.get('change_2h', 0)
                 if abs(change_2h) > 0.0:
                     symbol = coin.get('symbol', 'N/A').replace('/USDT','').replace('/usdt','')
                     down_2h_lines.append(f"{symbol}📉 2h:{change_2h:+.1f}%")
-        tweet_down_2h = f"{emoji} Top bajadas últimas 2h:\n" + ("\n".join(down_2h_lines) if down_2h_lines else "Ninguna moneda bajó en 2h")
+        tweet_down_2h = f"{emoji} Top bajadas de Cryptos últimas 2h:\n" + ("\n".join(down_2h_lines) if down_2h_lines else "Ninguna moneda bajó en 2h")
         tweet_down_2h = tweet_down_2h.strip()[:max_chars]
 
         return {
@@ -227,15 +455,26 @@ class AIAnalyzerService:
         }
 
     def analyze_and_recommend(self, coins: List[Dict], market_sentiment: Dict) -> Dict:
-        logger.info(f"🤖 Analizando datos con IA ({self.active_provider})...")
+        logger.debug("Analizando datos con IA")
+
+        simplified_coins = self._simplify_coins(coins)
+        cache_key = self._get_cache_key(
+            "analyze_and_recommend",
+            json.dumps(simplified_coins, ensure_ascii=False, sort_keys=True),
+            json.dumps(market_sentiment, ensure_ascii=False, sort_keys=True),
+        )
+
+        if self._is_cache_valid(cache_key):
+            logger.debug("Usando caché de análisis IA")
+            return self._cache[cache_key]
+
         prompt = f"""Eres un analista experto de criptomonedas. Analiza los siguientes datos y genera un reporte conciso:
 
-
 DATOS DEL MERCADO:
-{json.dumps(market_sentiment, indent=2, ensure_ascii=False)}
+{json.dumps(market_sentiment, ensure_ascii=False)}
 
-CRIPTOMONEDAS CON CAMBIOS SIGNIFICATIVOS (Top 10):
-{json.dumps(coins[:10], indent=2, ensure_ascii=False)}
+CRIPTOMONEDAS CON CAMBIOS SIGNIFICATIVOS:
+{json.dumps(simplified_coins, ensure_ascii=False)}
 
 Por favor, proporciona:
 1. Un análisis del sentimiento general del mercado (2-3 líneas)
@@ -246,59 +485,58 @@ Por favor, proporciona:
 
 Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto más amigable."""
         try:
-            ai_analysis = self._generate_content(prompt)
-            logger.info("✅ Análisis de IA completado")
-            result = {
-                'full_analysis': ai_analysis,
-
-                'market_overview': self._extract_section(ai_analysis, 1),
-                'top_coins_analysis': self._extract_section(ai_analysis, 2),
-                'recommendation': self._extract_section(ai_analysis, 3),
-                'confidence_level': self._extract_confidence(ai_analysis),
-                'warnings': self._extract_section(ai_analysis, 5),
-                'timestamp': market_sentiment.get('fear_greed_index', {}).get('timestamp', ''),
+            ai_analysis, _provider = self._call_with_fallback(prompt, max_tokens=2048)
+            logger.debug("Análisis de IA completado")
+            result: Dict[str, Any] = {
+                "full_analysis": ai_analysis,
+                "market_overview": self._extract_section(ai_analysis, 1),
+                "top_coins_analysis": self._extract_section(ai_analysis, 2),
+                "recommendation": self._extract_section(ai_analysis, 3),
+                "confidence_level": self._extract_confidence(ai_analysis),
+                "warnings": self._extract_section(ai_analysis, 5),
+                "timestamp": market_sentiment.get("fear_greed_index", {}).get("timestamp", ""),
             }
-            # Segunda pasada: obtener Top 3 Compras/Ventas en JSON estructurado
+
             json_prompt = f"""Devuelve en JSON válido las mejores oportunidades:
-            {{
-              "top_buys": [
-                {{"symbol": "SYM1", "reason": "breve razón"}},
-                {{"symbol": "SYM2", "reason": "breve razón"}},
-                {{"symbol": "SYM3", "reason": "breve razón"}}
-              ],
-              "top_sells": [
-                {{"symbol": "SYM1", "reason": "breve razón"}},
-                {{"symbol": "SYM2", "reason": "breve razón"}},
-                {{"symbol": "SYM3", "reason": "breve razón"}}
-              ],
-              "confidence": 1-10
-            }}
-            Basado en estas monedas y datos:
-            Monedas: {json.dumps(coins[:10], ensure_ascii=False)}
-            Sentimiento: {json.dumps(market_sentiment, ensure_ascii=False)}
-            Responde SOLO el JSON."""
+{{
+  "top_buys": [
+    {{"symbol": "SYM1", "reason": "breve razón"}},
+    {{"symbol": "SYM2", "reason": "breve razón"}},
+    {{"symbol": "SYM3", "reason": "breve razón"}}
+  ],
+  "top_sells": [
+    {{"symbol": "SYM1", "reason": "breve razón"}},
+    {{"symbol": "SYM2", "reason": "breve razón"}},
+    {{"symbol": "SYM3", "reason": "breve razón"}}
+  ],
+  "confidence": 1-10
+}}
+Basado en estas monedas y datos:
+Monedas: {json.dumps(simplified_coins, ensure_ascii=False)}
+Sentimiento: {json.dumps(market_sentiment, ensure_ascii=False)}
+Responde SOLO el JSON."""
             try:
-                jr_text = self._generate_content(json_prompt)
-                txt = jr_text.strip()
-                # Limpieza extra para OpenAI que a veces incluye markdown
-                if txt.startswith("```"):
-                    txt = txt.replace("```json", "").replace("```", "")
-                parsed = json.loads(txt)
+                jr_text, _ = self._call_with_fallback(json_prompt, max_tokens=512)
+                parsed = self._extract_json_safe(jr_text, expect="object")
                 if isinstance(parsed, dict):
-                    result['top_buys'] = parsed.get('top_buys', [])
-                    result['top_sells'] = parsed.get('top_sells', [])
-                    conf = parsed.get('confidence', None)
+                    result["top_buys"] = parsed.get("top_buys", [])
+                    result["top_sells"] = parsed.get("top_sells", [])
+                    conf = parsed.get("confidence")
                     if isinstance(conf, int) and 1 <= conf <= 10:
-                        result['confidence_level'] = conf
+                        result["confidence_level"] = conf
             except Exception:
                 pass
+
+            self._cache[cache_key] = result
+            self._cache_timestamps[cache_key] = time.time()
             return result
         except Exception as e:
-            logger.error(f"❌ Error al analizar con IA: {e}")
+            if not self._is_quota_error(e):
+                logger.debug("Error al analizar con IA")
             return {
-                'full_analysis': 'Error al generar análisis',
-                'recommendation': 'No se pudo generar recomendación',
-                'confidence_level': 0,
+                "full_analysis": "Error al generar análisis",
+                "recommendation": "No se pudo generar recomendación",
+                "confidence_level": 0,
             }
 
     def _extract_section(self, text: str, section_number: int) -> str:
@@ -374,10 +612,7 @@ Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto m�
             tweet_up = tweet_up.strip()
             if len(tweet_up) > max_chars:
                 tweet_up = tweet_up[:max_chars].rstrip(' .,;:\n')
-            # Bajadas: Top 10 por 24h < -10% (solo Binance, igual que Telegram)
             coins_down_24h = [coin for coin in coins_only_binance if coin.get('change_24h', 0) < -10]
-            logger.debug("[Twitter] Todas las monedas (Binance): %s", ", ".join([f"{coin.get('symbol')} {coin.get('change_24h')}" for coin in coins_only_binance]))
-            logger.debug("[Twitter] Monedas bajaron >10%% (24h, Binance): %s", ", ".join([f"{coin.get('symbol')} {coin.get('change_24h')}" for coin in coins_down_24h]))
             coins_down_sorted = sorted(coins_down_24h, key=lambda c: c.get('change_24h', 0))
             down_lines = build_tweet(coins_down_sorted, '📉')
             tweet_down = f"{emoji} {sentiment}. Top:\n{down_lines}" if down_lines else f"{emoji} {sentiment}. Top:\nNinguna moneda bajó más de 10% (debug: {len(coins_down_24h)} detectadas)"
@@ -386,13 +621,14 @@ Sé conciso, directo y profesional. Usa emojis relevantes para hacer el texto m�
                 tweet_down = tweet_down[:max_chars].rstrip(' .,;:\n')
             return {"up": tweet_up, "down": tweet_down}
         except Exception as e:
-            logger.error(f"❌ Error al generar tweet: {e}")
+            if not self._is_quota_error(e):
+                logger.debug("Error al generar tweet")
             return {"up": "📊 Análisis de mercado cripto actualizado.", "down": "📊 Análisis de mercado cripto actualizado."}
     
     def analyze_news_batch(self, news_titles: List[str]) -> List[Dict]:
         """
         Analiza un lote de noticias y selecciona las más importantes.
-        Soporta Gemini y OpenAI.
+        Soporta Gemini, OpenAI y OpenRouter.
         """
         if not news_titles:
             return []
@@ -424,57 +660,22 @@ FORMATO DE RESPUESTA JSON (Lista de objetos):
 ]
 """
         try:
-            def run_provider(provider: str) -> str:
-                if provider == 'gemini':
-                    response = self.gemini_model.generate_content(prompt)
-                    return response.text
-                if provider == 'openai':
-                    response = self.openai_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    return response.choices[0].message.content
-                raise RuntimeError("Proveedor inválido")
-
-            if self.active_provider not in ("gemini", "openai"):
-                logger.error("❌ Ningún proveedor de IA activo para analizar noticias.")
+            text, _ = self._call_with_fallback(prompt, max_tokens=1024)
+            if not text:
                 return []
 
-            try:
-                text = run_provider(self.active_provider)
-            except Exception as e:
-                logger.warning(f"⚠️ Falló {self.active_provider} en noticias: {e}")
-                fallback = 'openai' if self.active_provider == 'gemini' else 'gemini'
-                if fallback == 'openai' and not self.openai_client:
-                    raise e
-                if fallback == 'gemini' and not self.gemini_model:
-                    raise e
-                self.active_provider = fallback
-                text = run_provider(self.active_provider)
-
-            text = text.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                if len(lines) > 2:
-                    if "json" in lines[0]:
-                        text = "\n".join(lines[1:-1])
-                    else:
-                        text = text.replace("```json", "").replace("```", "")
-                else:
-                    text = text.replace("```json", "").replace("```", "")
-
-            text = text.replace("```json", "").replace("```", "").strip()
-            results = json.loads(text)
-            valid_results = []
+            results = self._extract_json_safe(text, expect="list")
+            valid_results: List[Dict[str, Any]] = []
             if isinstance(results, list):
                 for item in results:
                     if isinstance(item, dict) and 'original_index' in item and 'score' in item:
                         valid_results.append(item)
 
-            logger.info(f"✅ Análisis por lote completado ({self.active_provider}). Seleccionadas {len(valid_results)} noticias relevantes.")
+            logger.debug(f"Análisis por lote completado. Seleccionadas {len(valid_results)} noticias relevantes.")
             return valid_results
         except Exception as e:
-            logger.error(f"❌ Error en análisis por lote de noticias ({self.active_provider}): {e}")
+            if not self._is_quota_error(e):
+                logger.debug("Error en análisis por lote de noticias")
             return []
 
     def analyze_text(self, text: str, context: str = "") -> Dict:
@@ -493,13 +694,13 @@ FORMATO DE RESPUESTA JSON (Lista de objetos):
             prompt = f"""Analiza la siguiente noticia y asigna un score de relevancia del 0 al 10.
             
 Noticia: {text}
-
+            
 Responde SOLO con un JSON en este formato:
 {{
     "score": <número del 0 al 10>,
     "summary": "<resumen breve en 1 línea>"
 }}
-
+            
 Criterios:
 - 10: Noticia extremadamente importante (crash, regulación mayor, hack grande)
 - 7-9: Noticia muy relevante (movimientos significativos, anuncios importantes)
@@ -507,36 +708,31 @@ Criterios:
 - 1-3: Noticia poco relevante
 - 0: Spam o irrelevante"""
 
-            result_text = ""
-            if self.active_provider == 'gemini':
-                response = self.gemini_model.generate_content(prompt)
-                result_text = response.text
-            elif self.active_provider == 'openai':
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                result_text = response.choices[0].message.content
-            else:
-                return {'score': 5, 'summary': text[:100]}
+            result_text, _ = self._call_with_fallback(prompt, max_tokens=512)
+            if not result_text:
+                return {"score": 5, "summary": text[:100]}
 
-            result_text = result_text.strip()
-            
-            # Extraer JSON
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            
-            result = json.loads(result_text)
-            return {
-                'score': int(result.get('score', 5)),
-                'summary': result.get('summary', text[:100])
-            }
-            
+            parsed = self._extract_json_safe(result_text, expect="object")
+            if not isinstance(parsed, dict):
+                return {"score": 5, "summary": text[:100]}
+
+            score_raw = parsed.get("score", 5)
+            summary_raw = parsed.get("summary", text[:100])
+
+            try:
+                score = int(score_raw)
+            except Exception:
+                score = 5
+
+            score = max(0, min(score, 10))
+            summary = str(summary_raw) if summary_raw is not None else text[:100]
+
+            return {"score": score, "summary": summary}
+
         except Exception as e:
-            logger.warning(f"⚠️ Error en analyze_text ({self.active_provider}): {e}")
-            return {'score': 5, 'summary': text[:100]}
+            if not self._is_quota_error(e):
+                logger.debug("Error en analyze_text")
+            return {"score": 5, "summary": text[:100]}
 
     def classify_news_category(self, title: str, summary: str = "") -> Dict:
         """
@@ -560,30 +756,42 @@ Responde SOLO con JSON:
   "category": "<crypto|markets|signals>",
   "confidence": <entero 0-10>
 }}"""
-            result_text = ""
-            if self.active_provider == 'gemini':
-                response = self.gemini_model.generate_content(prompt)
-                result_text = response.text
-            elif self.active_provider == 'openai':
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                result_text = response.choices[0].message.content
-            else:
-                 return {"category": "crypto", "confidence": 5}
+            result_text, _ = self._call_with_fallback(prompt, max_tokens=512)
+            if not result_text:
+                return {"category": "crypto", "confidence": 5}
 
-            result_text = result_text.strip()
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            result = json.loads(result_text)
-            category = result.get("category", "crypto").lower()
-            if category not in ("crypto", "markets", "signals"):
-                category = "crypto"
-            confidence = int(result.get("confidence", 7))
-            return {"category": category, "confidence": min(max(confidence, 0), 10)}
+            parsed = self._extract_json_safe(result_text, expect="object")
+            if not isinstance(parsed, dict):
+                return {"category": "crypto", "confidence": 5}
+
+            category_raw = str(parsed.get("category", "crypto")).lower()
+            if category_raw not in ("crypto", "markets", "signals"):
+                category_raw = "crypto"
+
+            confidence_raw = parsed.get("confidence", 7)
+            try:
+                confidence = int(confidence_raw)
+            except Exception:
+                confidence = 7
+            confidence = min(max(confidence, 0), 10)
+
+            return {"category": category_raw, "confidence": confidence}
         except Exception as e:
-            logger.warning(f"⚠️ Error en classify_news_category ({self.active_provider}): {e}")
+            if not self._is_quota_error(e):
+                logger.debug("Error en classify_news_category")
             return {"category": "crypto", "confidence": 5}
+
+    def get_stats(self) -> Dict[str, Dict[str, Any]]:
+        stats: Dict[str, Dict[str, Any]] = {}
+        for provider in ("gemini", "openai", "openrouter"):
+            if provider in self._providers:
+                requests = self._metrics["requests"][provider]
+                failures = self._metrics["failures"][provider]
+                total_time = self._metrics["total_time"][provider]
+                avg_time = total_time / requests if requests else 0.0
+                stats[provider] = {
+                    "requests": requests,
+                    "failures": failures,
+                    "avg_response_time": avg_time,
+                }
+        return stats

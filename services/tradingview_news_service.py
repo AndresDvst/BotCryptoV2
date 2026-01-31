@@ -1,9 +1,15 @@
 """
 Servicio para scrapear noticias de TradingView y filtrarlas con IA.
+Refactorado para producción con separación de responsabilidades, retries y modo degradado.
 """
-import time
 import json
 import os
+import time
+import subprocess
+import shutil
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+import tempfile
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -14,7 +20,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-from typing import List, Dict
+import re
+
+T = TypeVar("T")
 
 class TradingViewNewsService:
     """Servicio para obtener noticias de TradingView News"""
@@ -34,35 +42,35 @@ class TradingViewNewsService:
         self.telegram = telegram
         self.twitter = twitter
         self.ai_analyzer = ai_analyzer
+        self._default_wait_seconds = 10
+        self._max_publish_per_cycle = 5
+        self._score_threshold = 7
+        self._retry_attempts = 3
+        self._retry_base_delay = 1.0
+        self._retry_max_delay = 6.0
         logger.info("✅ Servicio de Noticias TradingView inicializado")
         
-    def _get_driver(self):
-        """Inicializa el driver de Selenium"""
-        try:
-            options = Options()
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--remote-debugging-port=9222')
-            options.add_argument('--window-size=1920,1080')
-            if getattr(Config, 'TWITTER_HEADLESS', False):
-                options.add_argument('--headless=new')
-            # Usar el mismo perfil que Twitter para compartir sesión/configuración
-            user_data_dir = getattr(Config, 'CHROME_USER_DATA_DIR', None) or os.path.join(os.getcwd(), 'chrome_profile')
-            os.makedirs(user_data_dir, exist_ok=True)
-            options.add_argument(f'--user-data-dir={user_data_dir}')
-            options.add_argument('--profile-directory=Default')
-            # Resolver versión de chromedriver
-            driver_path = getattr(Config, 'CHROMEDRIVER_PATH', None) or os.getenv('CHROMEDRIVER_PATH', None)
-            if driver_path and os.path.isfile(driver_path):
-                service = Service(driver_path)
-                driver = webdriver.Chrome(service=service, options=options)
-            else:
-                service = Service(ChromeDriverManager().install())
-                driver = webdriver.Chrome(service=service, options=options)
-            return driver
-        except Exception as e:
-            logger.error(f"❌ Error al iniciar Chrome Driver: {e}")
-            return None
+    def _retry(self, func: Callable[[], T], attempts: int = None, base_delay: float = None, max_delay: float = None) -> Optional[T]:
+        attempts = attempts or self._retry_attempts
+        base_delay = base_delay or self._retry_base_delay
+        max_delay = max_delay or self._retry_max_delay
+        last_error: Optional[Exception] = None
+        for i in range(attempts):
+            try:
+                return func()
+            except Exception as e:
+                last_error = e
+                delay = min(max_delay, base_delay * (2 ** i))
+                logger.warning(f"⚠️ Retry intento {i+1}/{attempts}: {e} (esperando {delay:.1f}s)")
+                time.sleep(delay)
+        if last_error:
+            logger.error(f"❌ Falló tras {attempts} intentos: {last_error}")
+        return None
+
+    def _get_driver(self) -> Optional[webdriver.Chrome]:
+        """Inicializa el driver de Selenium usando BrowserManager"""
+        from utils.browser_utils import BrowserManager
+        return BrowserManager.get_driver()
 
     def _load_history(self) -> List[str]:
         """Carga el historial de noticias procesadas"""
@@ -85,6 +93,16 @@ class TradingViewNewsService:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"❌ Error guardando historial de noticias: {e}")
+
+    def _wait_for_articles(self, driver: webdriver.Chrome) -> List[Any]:
+        try:
+            WebDriverWait(driver, self._default_wait_seconds).until(
+                EC.presence_of_all_elements_located((By.TAG_NAME, "article"))
+            )
+            return driver.find_elements(By.TAG_NAME, "article")
+        except Exception as e:
+            logger.warning(f"⚠️ Timeout esperando artículos: {e}")
+            return []
 
     def scrape_news(self) -> List[Dict]:
         """
@@ -109,7 +127,7 @@ class TradingViewNewsService:
 
         # Si no hay driver compartido, crear uno nuevo temporal
         if not driver:
-            driver = self._get_driver()
+            driver = self._retry(self._get_driver)
             if not driver:
                 return []
         
@@ -125,11 +143,10 @@ class TradingViewNewsService:
                 logger.info("📑 Abierta nueva pestaña para noticias")
             
             driver.get(self.NEWS_URL)
-            time.sleep(5)  # Esperar a que cargue
+            articles = self._wait_for_articles(driver)
             
             # --- LOGICA DE SCRAPING EXISTENTE ---
             processed_titles = self._load_history()
-            articles = driver.find_elements(By.TAG_NAME, "article")
             
             for article in articles:
                 try:
@@ -188,9 +205,13 @@ class TradingViewNewsService:
             
         return news_items
 
-    def process_and_publish(self):
+    def process_and_publish(self, dry_run: bool = False):
         """
-        Ejecuta el ciclo completo: Scraping -> Análisis IA (Lote) -> Publicación
+        Ejecuta el ciclo completo: Scraping -> Análisis IA (Lote) -> Publicación.
+        Modo degradado: fallos de IA o Twitter no detienen el ciclo.
+        
+        Args:
+            dry_run: Si True, no publica; solo registra resultados.
         """
         if not self.ai_analyzer:
             logger.error("❌ AIAnalyzer no configurado")
@@ -205,8 +226,13 @@ class TradingViewNewsService:
         logger.info(f"🧠 Analizando {len(news_list)} noticias con IA (Modo Batch)...")
         
         # 2. Analizar con IA (LOTE)
-        news_titles = [n['title'] for n in news_list]
-        analyzed_results = self.ai_analyzer.analyze_news_batch(news_titles)
+        analyzed_results: List[Dict] = []
+        try:
+            news_titles = [n['title'] for n in news_list]
+            analyzed_results = self._retry(lambda: self.ai_analyzer.analyze_news_batch(news_titles)) or []
+        except Exception as e:
+            logger.error(f"❌ Falló análisis batch IA: {e}")
+            analyzed_results = []
         
         important_news = []
         
@@ -220,22 +246,22 @@ class TradingViewNewsService:
                     'summary': item.get('summary', 'Sin resumen'),
                     'category': item.get('category', 'crypto')
                 }
-                important_news.append(original_news)
-                logger.info(f"🔥 Noticia Importante ({item.get('score')}/10): {original_news['title']}")
+                if original_news['analysis']['score'] >= self._score_threshold:
+                    important_news.append(original_news)
+                    logger.info(f"🔥 Noticia ({item.get('score')}/10): {original_news['title']}")
 
         # Ordenar por relevancia
         important_news.sort(key=lambda x: x['analysis']['score'], reverse=True)
         
-        # Top 5
-        top_news = important_news[:5]
+        top_news = important_news[: self._max_publish_per_cycle]
         
         # 3. Publicar
         if top_news:
-            self._publish_news(top_news)
+            self._publish_news(top_news, dry_run=dry_run)
         else:
             logger.info("✅ Ninguna noticia superó el umbral de relevancia (7/10)")
 
-    def _publish_news(self, news_list: List[Dict]):
+    def _publish_news(self, news_list: List[Dict], dry_run: bool = False):
         """Publica las noticias filtradas"""
         
         for news in news_list:
@@ -254,20 +280,25 @@ class TradingViewNewsService:
             message += f"🔗 {url}"
             
             # Telegram con clasificación IA -> bot correcto
-            if self.telegram:
-                # Usar la categoría que ya nos dio el análisis batch
-                if category == 'markets':
-                    self.telegram.send_message(message, bot_type='markets')
-                elif category == 'signals':
-                    self.telegram.send_message(message, bot_type='signals')
-                else:
-                    self.telegram.send_message(message, bot_type='crypto')
-                time.sleep(2)
+            if self.telegram and not dry_run:
+                try:
+                    def send_telegram() -> None:
+                        if category == 'markets':
+                            self.telegram.send_message(message, bot_type='markets')
+                        elif category == 'signals':
+                            self.telegram.send_message(message, bot_type='signals')
+                        else:
+                            self.telegram.send_message(message, bot_type='crypto')
+                    self._retry(send_telegram)
+                except Exception as e:
+                    logger.error(f"❌ Error enviando a Telegram: {e}")
                 
             # Twitter
-            if self.twitter:
-                self.twitter.post_tweet(message, category='news')
-                time.sleep(10) # Evitar flood
+            if self.twitter and not dry_run:
+                try:
+                    self._retry(lambda: self.twitter.post_tweet(message, category='news'))
+                except Exception as e:
+                    logger.error(f"❌ Error publicando en Twitter (degradado): {e}")
                 
             logger.info(f"✅ Publicada noticia: {title} ({category})")
             
