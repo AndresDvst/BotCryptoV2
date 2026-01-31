@@ -1,7 +1,7 @@
 # 🤖 Crypto Trading Bot V3 - Análisis Multi-Mercado con IA
 
 <div align="center">
-<a href="https://wa.me/+573001234567?text=Hola%20desde%20BotCryptoV2%20🚀" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" /></a>
+<a href="https://wa.link/a3j64p" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" /></a>
 <a href="https://twitter.com/AndresDvst25" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/X/Twitter-000000?style=for-the-badge&logo=x&logoColor=white" /></a>
 <a href="https://www.facebook.com/andres.campos.732122" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" /></a>
 <a href="https://www.instagram.com/andres.devback/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Instagram-E4405F?style=for-the-badge&logo=instagram&logoColor=white" /></a>
@@ -645,3 +645,4 @@ Este bot es solo para análisis e información. **NO constituye asesoría financ
 _Hecho con ❤️ por [AndresDvst](https://github.com/AndresDvst)_
 
 </div>
+
