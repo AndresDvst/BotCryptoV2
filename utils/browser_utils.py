@@ -54,6 +54,13 @@ class BrowserManager:
             
             # --- Opciones adicionales para Docker/Linux ---
             if is_docker or is_linux:
+                # Configurar DISPLAY para Xvfb
+                display = os.environ.get('DISPLAY', ':99')
+                os.environ['DISPLAY'] = display
+                logger.info(f"🖥️ DISPLAY configurado: {display}")
+                
+                # Opciones críticas para Docker
+                options.add_argument('--disable-setuid-sandbox')
                 options.add_argument('--disable-extensions')
                 options.add_argument('--disable-background-networking')
                 options.add_argument('--disable-default-apps')
@@ -63,8 +70,12 @@ class BrowserManager:
                 options.add_argument('--no-default-browser-check')
                 options.add_argument('--disable-crash-reporter')
                 options.add_argument('--disable-infobars')
-                options.add_argument('--single-process')  # Importante para Docker
+                options.add_argument('--disable-features=VizDisplayCompositor')
                 options.add_argument('--window-size=1920,1080')
+                options.add_argument('--disable-hang-monitor')
+                options.add_argument('--disable-prompt-on-repost')
+                options.add_argument('--disable-domain-reliability')
+                options.add_argument('--disable-component-update')
                 # Remote debugging solo si no estamos en headless
                 if not headless:
                     options.add_argument('--remote-debugging-port=9222')

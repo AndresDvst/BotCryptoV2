@@ -12,6 +12,9 @@ services:
     stdin_open: true
     tty: true
     
+    # Shared memory para Chrome (CRÍTICO para evitar crashes)
+    shm_size: '2gb'
+    
     # Variables de entorno (copia tu .env o define aquí)
     env_file:
       - .env
