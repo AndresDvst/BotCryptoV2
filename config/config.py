@@ -94,8 +94,8 @@ class Config:
     # Binario de Chrome
         _env_chrome_binary = os.getenv('CHROME_BINARY_PATH', '')
         if IS_DOCKER or IS_LINUX:
-            # En Docker/Linux: usar el enlace simbólico estándar
-            CHROME_BINARY_PATH = '/usr/bin/google-chrome'
+            # En Docker/Linux: usar siempre la ruta real del binario
+            CHROME_BINARY_PATH = '/opt/google/chrome/google-chrome'
         else:
             # En Windows: usar Chrome portable del proyecto
             _project_chrome_binary = os.path.join(BASE_DIR, 'utils', 'chrome-win64', 'chrome-win', 'chrome.exe')
