@@ -33,5 +33,19 @@ echo "📺 noVNC disponible en: http://localhost:6080"
 echo "🔑 Perfil Chrome en: /app/chrome_profile"
 echo "============================================"
 
-# Iniciar supervisord (maneja todos los procesos)
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+# Iniciar servicios gráficos en background
+/usr/bin/Xvfb :99 -screen 0 1920x1080x24 &
+sleep 2
+DISPLAY=:99 /usr/bin/fluxbox &
+/usr/bin/x11vnc -display :99 -forever -shared -rfbport 5900 -nopw &
+/usr/share/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+
+echo "============================================"
+echo "🖥️ Servicios gráficos iniciados"
+echo "============================================"
+
+# Esperar a que X esté listo
+sleep 3
+
+# Ejecutar el bot en foreground (permite docker attach)
+exec python /app/main.py
