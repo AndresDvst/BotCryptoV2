@@ -1121,6 +1121,12 @@ class TechnicalAnalysisService:
                     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     df.set_index('timestamp', inplace=True)
+                    
+                    # Verificar que tengamos suficientes datos para calcular indicadores
+                    if len(df) < 60:
+                        logger.warning(f"⚠️ Datos insuficientes para {symbol} (relajado): {len(df)} filas (necesarias ≥60)")
+                        continue
+                    
                     df = self.calculate_indicators(df)
                     
                     ticker = self.binance.exchange.fetch_ticker(symbol)

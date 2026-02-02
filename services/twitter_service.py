@@ -282,10 +282,8 @@ class TwitterService:
             tweet_box.click()
             self._human_delay(0.5, 1)
             
-            # Usar clipboard para pegar el texto (soporta emojis y caracteres especiales)
-            import pyperclip
-            pyperclip.copy(text)
-            self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]').send_keys(Keys.CONTROL, 'v')
+            # Enviar el texto directamente al área de texto (compatible con headless)
+            tweet_box.send_keys(text)
             self._human_delay(1, 2)
             
             # Si hay imagen, adjuntarla
