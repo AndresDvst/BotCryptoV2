@@ -1,0 +1,59 @@
+# ============================================
+# BotCryptoV2 - Docker Ignore
+# ============================================
+
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environment
+.venv
+venv
+ENV
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs locales (se crean en volumen)
+logs/*.log
+
+# Chrome Windows (no necesario en Linux)
+utils/chrome-win64/
+utils/chromedriver.exe
+
+# Perfil local de Chrome (se monta como volumen)
+chrome_profile/
+
+# Archivos de desarrollo
+*.md
+!README.md
+tests/
+backtest_results/
+
+# Archivos sensibles (deben ir en .env)
+.env
+*.json.example
+contraseñasBOTS.json
+
+# Imágenes generadas (se pueden regenerar)
+images/signals/*.png
+
+# Otros
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store

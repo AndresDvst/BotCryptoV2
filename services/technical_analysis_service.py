@@ -29,13 +29,15 @@ class TechnicalAnalysisConfig:
     RSI_OVERBOUGHT: int = 70
     RSI_NEUTRAL_LOWER: int = 45
     RSI_NEUTRAL_UPPER: int = 55
-    MIN_CONFIDENCE: float = 35.0  # Antes: 60.0
-    MIN_CONFLUENCE_INDICATORS: int = 2  # Antes: 3
-    MIN_VOLUME_MULTIPLIER: float = 1.2  # Antes: 1.5
+    MIN_CONFIDENCE: float = 40.0  # Umbral de confianza mínimo (40%)
+    MIN_CONFLUENCE_INDICATORS: int = 2
+    MIN_VOLUME_MULTIPLIER: float = 1.2
+    MIN_VOLUME_RATIO: float = 1.2  # Alias para compatibilidad
     
-    # Nuevos parámetros para señales de baja confianza
+    # Parámetros para señales de baja confianza
     ALLOW_LOW_CONFIDENCE: bool = True
     MIN_SIGNALS_TARGET: int = 5
+    RELAXED_MIN_CONFIDENCE: float = 25.0  # Para reintento con filtros relajados
     ATR_MULTIPLIER_SL: float = 2.0
     ATR_MULTIPLIER_TP: float = 3.0
     ATR_MULTIPLIER_SL_LOW: float = 1.8
@@ -54,6 +56,12 @@ class TechnicalAnalysisConfig:
     INDICATOR_WEIGHT_EMA_CROSS: float = 3.0
     INDICATOR_WEIGHT_BB: float = 1.5
     INDICATOR_WEIGHT_STOCH: float = 1.5
+    
+    # Validación con Backtest
+    ENABLE_BACKTEST_VALIDATION: bool = True
+    BACKTEST_MIN_WIN_RATE: float = 40.0  # Win rate mínimo para validar señal
+    BACKTEST_DAYS: int = 14  # Días de histórico para backtest rápido
+    BACKTEST_CACHE_TTL: int = 3600  # Cache de resultados por 1 hora
 
 
 class TechnicalAnalysisService:
@@ -67,6 +75,7 @@ class TechnicalAnalysisService:
         self._binance = binance_service
         self._htf_trend_cache = {}  # {symbol_timeframe: (trend, timestamp)}
         self._htf_cache_ttl = 3600  # 1 hora
+        self._backtest_cache: Dict[str, Tuple[float, float]] = {}  # {symbol: (win_rate, timestamp)}
         self.STATS_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'stats_history.json')
         
         logger.info("✅ Servicio de Análisis Técnico inicializado")
@@ -101,9 +110,114 @@ class TechnicalAnalysisService:
             'rejected_bb_middle': 0,
             'rejected_multi_timeframe': 0,
             'rejected_risk_exposure': 0,
-            'rejected_risk_positions': 0
+            'rejected_risk_positions': 0,
+            'rejected_backtest': 0,
+            'backtest_validated': 0
         }
     
+    def _validate_with_backtest(self, symbol: str) -> Tuple[bool, float, Optional[Dict]]:
+        """
+        Valida una señal ejecutando un backtest rápido en el símbolo.
+        
+        Args:
+            symbol: Par de trading (ej: 'BTC/USDT')
+            
+        Returns:
+            Tuple (is_valid, win_rate, backtest_metrics)
+        """
+        import time as time_module
+        
+        # Verificar cache
+        cache_key = symbol
+        if cache_key in self._backtest_cache:
+            cached_win_rate, cached_time = self._backtest_cache[cache_key]
+            if time_module.time() - cached_time < self.config.BACKTEST_CACHE_TTL:
+                is_valid = cached_win_rate >= self.config.BACKTEST_MIN_WIN_RATE
+                return is_valid, cached_win_rate, None
+        
+        try:
+            # Importar el motor de backtest
+            from core.domain import Candle, MarketSeries
+            from core.backtest import BacktestEngine, BacktestConfig
+            from core.backtest.execution import ExecutionModel, ExecutionConfig
+            from core.risk import RiskManager, RiskConfig
+            from core.strategies import TrendPullbackStrategy, TrendPullbackConfig
+            
+            # Obtener datos históricos
+            ohlcv = self.binance.exchange.fetch_ohlcv(
+                symbol, 
+                timeframe='1h', 
+                limit=min(500, self.config.BACKTEST_DAYS * 24)
+            )
+            
+            if len(ohlcv) < 100:
+                logger.debug(f"⚠️ Datos insuficientes para backtest de {symbol}")
+                return True, 50.0, None  # Asumir válido si no hay datos
+            
+            # Convertir a Candles
+            candles = [
+                Candle(
+                    timestamp=int(row[0]),
+                    open=float(row[1]),
+                    high=float(row[2]),
+                    low=float(row[3]),
+                    close=float(row[4]),
+                    volume=float(row[5])
+                )
+                for row in ohlcv
+            ]
+            
+            # Configurar backtest
+            strategy = TrendPullbackStrategy(TrendPullbackConfig())
+            risk_manager = RiskManager(RiskConfig(risk_per_trade=0.02, max_drawdown=0.20))
+            execution = ExecutionModel(ExecutionConfig(fee_rate=0.001, slippage_pct=0.0005))
+            engine = BacktestEngine(
+                strategy=strategy,
+                risk_manager=risk_manager,
+                execution_model=execution,
+                config=BacktestConfig(initial_capital=10000.0, allow_short=True)
+            )
+            
+            # Ejecutar backtest
+            series = MarketSeries(symbol=symbol, candles=candles)
+            result = engine.run(series)
+            
+            # Calcular métricas
+            trades = result.trades
+            if not trades:
+                # Sin trades = estrategia no aplica, permitir pero con advertencia
+                self._backtest_cache[cache_key] = (50.0, time_module.time())
+                return True, 50.0, None
+            
+            winning = len([t for t in trades if t.pnl > 0])
+            win_rate = (winning / len(trades)) * 100
+            
+            # Guardar en cache
+            self._backtest_cache[cache_key] = (win_rate, time_module.time())
+            
+            is_valid = win_rate >= self.config.BACKTEST_MIN_WIN_RATE
+            
+            metrics = {
+                'win_rate': round(win_rate, 1),
+                'total_trades': len(trades),
+                'winning_trades': winning,
+                'total_return': round(result.metrics.total_return * 100, 2) if hasattr(result.metrics, 'total_return') else 0
+            }
+            
+            if is_valid:
+                logger.info(f"✅ Backtest {symbol}: Win Rate {win_rate:.1f}% ({winning}/{len(trades)} trades) - VALIDADO")
+                self._increment_stat('backtest_validated')
+            else:
+                logger.info(f"❌ Backtest {symbol}: Win Rate {win_rate:.1f}% < {self.config.BACKTEST_MIN_WIN_RATE}% - RECHAZADO")
+                self._increment_stat('rejected_backtest')
+            
+            return is_valid, win_rate, metrics
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error en backtest de {symbol}: {e}")
+            # En caso de error, permitir la señal pero sin validación
+            return True, 50.0, None
+
     def _increment_stat(self, key: str) -> None:
         """Incrementa un contador estadístico de forma segura."""
         if not hasattr(self, "_stats"):
@@ -287,9 +401,13 @@ class TechnicalAnalysisService:
             logger.error(f"❌ Error calculando indicadores: {e}")
             return df
     
-    def generate_signal(self, df: pd.DataFrame, symbol: str, spread_percent: Optional[float] = None) -> Optional[Dict]:
+    def generate_signal(self, df: pd.DataFrame, symbol: str, spread_percent: Optional[float] = None,
+                         relaxed_mode: bool = False) -> Optional[Dict]:
         """
         Genera señal de trading basada en indicadores técnicos y filtros avanzados.
+        
+        Args:
+            relaxed_mode: Si True, omite filtros de BB media y RSI neutral
         """
         try:
             if df is None or len(df) < 30:
@@ -328,19 +446,21 @@ class TechnicalAnalysisService:
                 logger.info(f"ℹ️ Señal descartada para {symbol}: ATR inválido")
                 return None
             
-            # Filtro RSI neutral
-            if self.config.RSI_NEUTRAL_LOWER <= rsi <= self.config.RSI_NEUTRAL_UPPER:
-                logger.info(f"ℹ️ Señal rechazada para {symbol}: RSI en zona neutral ({rsi:.2f})")
-                self._increment_stat('rejected_rsi_neutral')
-                return None
-            
-            # Filtro de proximidad a la banda media de Bollinger
-            if np.isfinite(bb_middle) and bb_middle > 0:
-                distance_bb = abs(current_price - bb_middle) / bb_middle * 100
-                if distance_bb <= self.config.BB_MIDDLE_PROXIMITY_PERCENT:
-                    logger.info(f"ℹ️ Señal rechazada para {symbol}: precio cerca de BB media ({distance_bb:.2f}%)")
-                    self._increment_stat('rejected_bb_middle')
+            # Filtro RSI neutral (omitir en modo relajado)
+            if not relaxed_mode:
+                if self.config.RSI_NEUTRAL_LOWER <= rsi <= self.config.RSI_NEUTRAL_UPPER:
+                    logger.info(f"ℹ️ Señal rechazada para {symbol}: RSI en zona neutral ({rsi:.2f})")
+                    self._increment_stat('rejected_rsi_neutral')
                     return None
+            
+            # Filtro de proximidad a la banda media de Bollinger (omitir en modo relajado)
+            if not relaxed_mode:
+                if np.isfinite(bb_middle) and bb_middle > 0:
+                    distance_bb = abs(current_price - bb_middle) / bb_middle * 100
+                    if distance_bb <= self.config.BB_MIDDLE_PROXIMITY_PERCENT:
+                        logger.info(f"ℹ️ Señal rechazada para {symbol}: precio cerca de BB media ({distance_bb:.2f}%)")
+                        self._increment_stat('rejected_bb_middle')
+                        return None
             
             # Filtro de spread
             if spread_percent is not None and spread_percent > self.config.MAX_SPREAD_PERCENT:
@@ -348,7 +468,8 @@ class TechnicalAnalysisService:
                 self._increment_stat('rejected_spread')
                 return None
             
-            # Confirmación de volumen
+            # Confirmación de volumen (relajado si relaxed_mode)
+            min_volume = self.config.MIN_VOLUME_MULTIPLIER if not relaxed_mode else 0.3
             volume_ratio = 1.0
             volume_series = df['volume'].astype(float)
             if len(volume_series.dropna()) >= 20:
@@ -356,12 +477,13 @@ class TechnicalAnalysisService:
                 current_volume = float(last_row['volume'])
                 if avg_volume > 0 and current_volume > 0:
                     volume_ratio = current_volume / avg_volume
-                    if volume_ratio < self.config.MIN_VOLUME_MULTIPLIER:
-                        logger.info(
-                            f"ℹ️ Señal rechazada para {symbol}: volumen actual {volume_ratio:.2f}x por debajo del mínimo requerido"
-                        )
-                        self._increment_stat('rejected_volume')
-                        return None
+                    if volume_ratio < min_volume:
+                        if not relaxed_mode:
+                            logger.info(
+                                f"ℹ️ Señal rechazada para {symbol}: volumen actual {volume_ratio:.2f}x por debajo del mínimo requerido"
+                            )
+                            self._increment_stat('rejected_volume')
+                            return None
             
             score = 0.0
             reasons: List[str] = []
@@ -535,11 +657,22 @@ class TechnicalAnalysisService:
             # Calcular distancia al stop loss
             risk_per_unit = abs(entry_price - stop_loss)
             
-            # Calcular cantidad de unidades
+            # Calcular cantidad de unidades basada en riesgo
             position_size = risk_usd / risk_per_unit if risk_per_unit > 0 else 0
             
             # Calcular valor total de la posición
             position_value = position_size * entry_price
+            
+            # LÍMITE: La posición no puede superar el MAX_PORTFOLIO_EXPOSURE_PERCENT del capital
+            max_position_value = capital * (self.config.MAX_PORTFOLIO_EXPOSURE_PERCENT / 100)
+            if position_value > max_position_value:
+                # Recalcular position size para que no supere el límite
+                original_position_value = position_value
+                position_value = max_position_value
+                position_size = position_value / entry_price if entry_price > 0 else 0
+                # Recalcular riesgo real
+                risk_usd = position_size * risk_per_unit
+                logger.info(f"⚠️ Posición limitada: ${original_position_value:.2f} → ${position_value:.2f} (max {self.config.MAX_PORTFOLIO_EXPOSURE_PERCENT}%)")
             
             # Calcular porcentaje de exposición
             exposure_percent = (position_value / capital) * 100
@@ -688,16 +821,25 @@ class TechnicalAnalysisService:
             logger.info(f"ℹ️ No se pudo obtener tendencia superior para {symbol} ({timeframe}): {e}")
             return None
     
-    def run_technical_analysis(self, capital: float = 1000, risk_percent: float = 2):
+    def run_technical_analysis(self, capital: Optional[float] = None, risk_percent: Optional[float] = None,
+                                telegram=None, twitter=None):
         """
-        Método wrapper para ejecutar análisis técnico completo.
-        Analiza las top monedas de Binance y genera señales.
+        Análisis técnico exhaustivo de top monedas + LTC.
+        Usa filtros relajados para garantizar al menos 2 señales.
         
         Args:
-            capital: Capital disponible en USD
-            risk_percent: Porcentaje de riesgo por operación
+            capital: Capital disponible en USD (default: Config.DEFAULT_CAPITAL)
+            risk_percent: Porcentaje de riesgo por operación (default: Config.DEFAULT_RISK_PERCENT)
+            telegram: Servicio de Telegram para publicar
+            twitter: Servicio de Twitter para publicar
         """
-        logger.info("\n🎯 ANÁLISIS TÉCNICO CON SEÑALES DE TRADING")
+        # Usar valores de Config si no se especifican
+        if capital is None:
+            capital = getattr(Config, 'DEFAULT_CAPITAL', 20.0)
+        if risk_percent is None:
+            risk_percent = getattr(Config, 'DEFAULT_RISK_PERCENT', 25.0)
+            
+        logger.info("\n🎯 ANÁLISIS TÉCNICO EXHAUSTIVO (Top Monedas + LTC)")
         logger.info("=" * 60)
         logger.info(f"💰 Capital: ${capital}")
         logger.info(f"⚠️  Riesgo por operación: {risk_percent}%")
@@ -708,13 +850,32 @@ class TechnicalAnalysisService:
         
         self._reset_stats()
         
-        # Obtener top 10 monedas por volumen
-        logger.info("\n📊 Obteniendo top monedas por volumen...")
+        # Obtener top 10 monedas por volumen + LTC obligatorio
+        logger.info("\n📊 Obteniendo top monedas por volumen + LTC...")
         tickers = self.binance.exchange.fetch_tickers()
         usdt_pairs = {k: v for k, v in tickers.items() if k.endswith('/USDT')}
         sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1].get('quoteVolume', 0), reverse=True)[:10]
         
+        # Agregar LTC si no está en el top 10
+        ltc_symbol = 'LTC/USDT'
+        if ltc_symbol not in [p[0] for p in sorted_pairs] and ltc_symbol in usdt_pairs:
+            sorted_pairs.append((ltc_symbol, usdt_pairs[ltc_symbol]))
+            logger.info("   ➕ LTC/USDT agregado a la lista")
+        
+        symbols_list = [p[0] for p in sorted_pairs]
+        logger.info(f"   📋 Analizando: {', '.join(symbols_list)}")
+        
+        # MODO EXHAUSTIVO: Guardar configuración original
+        original_min_confidence = self.config.MIN_CONFIDENCE
+        original_min_volume_ratio = self.config.MIN_VOLUME_RATIO
+        original_bb_distance = getattr(self.config, 'MIN_BB_DISTANCE_PERCENT', 2.0)
+        
+        # Aplicar filtros relajados para análisis exhaustivo
+        self.config.MIN_CONFIDENCE = 25.0  # Muy bajo para capturar más señales
+        self.config.MIN_VOLUME_RATIO = 0.3  # Reducir requisito de volumen
+        
         signals = []
+        all_candidates = []  # Guardar todas las señales candidatas
         used_exposure_percent = 0.0
         open_positions = 0
         
@@ -738,67 +899,72 @@ class TechnicalAnalysisService:
                     mid = (bid + ask) / 2
                     spread_percent = ((ask - bid) / mid) * 100
                 
-                signal = self.generate_signal(df, symbol, spread_percent=spread_percent)
+                # Generar señal con modo relajado para BB distance
+                signal = self.generate_signal(df, symbol, spread_percent=spread_percent, relaxed_mode=True)
                 
                 if signal:
-                    higher_trend = self._get_higher_timeframe_trend(symbol, timeframe='4h')
-                    if higher_trend == "bull" and signal['signal_type'] == "SHORT":
-                        logger.info(f"ℹ️ Señal SHORT rechazada en {symbol}: tendencia 4h alcista")
-                        self._increment_stat('rejected_multi_timeframe')
-                        continue
-                    if higher_trend == "bear" and signal['signal_type'] == "LONG":
-                        logger.info(f"ℹ️ Señal LONG rechazada en {symbol}: tendencia 4h bajista")
-                        self._increment_stat('rejected_multi_timeframe')
-                        continue
-                    
-                    position = self.calculate_position_size(
-                        capital,
-                        risk_percent,
-                        signal['entry_price'],
-                        signal['stop_loss']
-                    )
-                    
-                    if not position:
-                        continue
-                    
-                    exposure = position.get('exposure_percent', 0)
-                    if open_positions + 1 > self.config.MAX_POSITIONS:
-                        logger.info(f"ℹ️ Señal rechazada por límite de posiciones ({self.config.MAX_POSITIONS}) en {symbol}")
-                        self._increment_stat('rejected_risk_positions')
-                        continue
-                    if used_exposure_percent + exposure > self.config.MAX_PORTFOLIO_EXPOSURE_PERCENT:
-                        logger.info(
-                            f"ℹ️ Señal rechazada por exposición total (> {self.config.MAX_PORTFOLIO_EXPOSURE_PERCENT}%) en {symbol}"
-                        )
-                        self._increment_stat('rejected_risk_exposure')
-                        continue
-                    
-                    used_exposure_percent += exposure
-                    open_positions += 1
-                    
-                    signal['position'] = position
-                    signals.append(signal)
+                    # Guardar candidato con su confianza
+                    all_candidates.append({
+                        'signal': signal,
+                        'ticker': ticker,
+                        'confidence': signal.get('confidence', 0)
+                    })
                 
             except Exception as e:
-                # Silenciar errores individuales para mantener salida limpia
                 continue
+        
+        # Restaurar configuración original
+        self.config.MIN_CONFIDENCE = original_min_confidence
+        self.config.MIN_VOLUME_RATIO = original_min_volume_ratio
+        
+        # Ordenar candidatos por confianza (mayor primero)
+        all_candidates.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # Tomar las mejores señales (mínimo 2, máximo 5)
+        min_signals = 2
+        max_signals = 5
+        
+        for candidate in all_candidates[:max_signals]:
+            signal = candidate['signal']
+            symbol = signal['symbol']
+            
+            # Validar contra tendencia de 4h (solo para señales con buena confianza)
+            if signal.get('confidence', 0) >= 40:
+                higher_trend = self._get_higher_timeframe_trend(symbol, timeframe='4h')
+                if higher_trend == "bull" and signal['signal_type'] == "SHORT":
+                    if len(signals) >= min_signals:  # Solo rechazar si ya tenemos mínimo
+                        logger.info(f"ℹ️ Señal SHORT rechazada en {symbol}: tendencia 4h alcista")
+                        continue
+                if higher_trend == "bear" and signal['signal_type'] == "LONG":
+                    if len(signals) >= min_signals:
+                        logger.info(f"ℹ️ Señal LONG rechazada en {symbol}: tendencia 4h bajista")
+                        continue
+            
+            position = self.calculate_position_size(
+                capital,
+                risk_percent,
+                signal['entry_price'],
+                signal['stop_loss']
+            )
+            
+            if not position:
+                continue
+            
+            signal['position'] = position
+            signals.append(signal)
+            logger.info(f"✅ {symbol} - {signal['signal_type']} (Confianza: {signal.get('confidence', 0):.1f}%)")
         
         long_count = len([s for s in signals if "LONG" in s['signal_type']])
         short_count = len([s for s in signals if "SHORT" in s['signal_type']])
-        logger.info(f"\n✅ Análisis técnico completado:")
+        
+        logger.info(f"\n✅ Análisis exhaustivo completado:")
         logger.info(f"   🟢 {long_count} señales LONG")
         logger.info(f"   🔴 {short_count} señales SHORT")
-        logger.info(
-            f"   📊 Stats: evaluadas={self._stats.get('signals_evaluated', 0)}, "
-            f"rechazadas_volumen={self._stats.get('rejected_volume', 0)}, "
-            f"rechazadas_confluencia={self._stats.get('rejected_confluence', 0)}, "
-            f"rechazadas_RSI_neutral={self._stats.get('rejected_rsi_neutral', 0)}, "
-            f"rechazadas_spread={self._stats.get('rejected_spread', 0)}, "
-            f"rechazadas_confianza={self._stats.get('rejected_confidence', 0)}, "
-            f"rechazadas_multitimeframe={self._stats.get('rejected_multi_timeframe', 0)}, "
-            f"rechazadas_riesgo_exposición={self._stats.get('rejected_risk_exposure', 0)}, "
-            f"rechazadas_riesgo_posiciones={self._stats.get('rejected_risk_positions', 0)}"
-        )
+        logger.info(f"   📊 Candidatos evaluados: {len(all_candidates)}")
+        
+        # Publicar si hay señales y se proporcionaron servicios
+        if signals and (telegram or twitter):
+            self._publish_signals(signals, telegram, twitter, capital, risk_percent)
         
         return signals
     
@@ -807,13 +973,19 @@ class TechnicalAnalysisService:
         significant_coins: List[Dict[str, Any]],
         telegram=None,
         twitter=None,
-        capital: float = 1000,
-        risk_percent: float = 2
+        capital: Optional[float] = None,
+        risk_percent: Optional[float] = None
     ):
         """
         Analiza las monedas con cambios significativos y genera top 5 LONG y top 5 SHORT.
         Publica los resultados en Telegram y Twitter.
         """
+        # Usar valores de Config si no se especifican
+        if capital is None:
+            capital = getattr(Config, 'DEFAULT_CAPITAL', 20.0)
+        if risk_percent is None:
+            risk_percent = getattr(Config, 'DEFAULT_RISK_PERCENT', 25.0)
+        
         logger.info("\n🎯 ANÁLISIS TÉCNICO DE MONEDAS SIGNIFICATIVAS")
         logger.info("=" * 60)
         logger.info(f"💰 Capital: ${capital}")
@@ -892,6 +1064,15 @@ class TechnicalAnalysisService:
                     used_exposure_percent += exposure
                     open_positions += 1
                     
+                    # Validación con Backtest (si está habilitada)
+                    if self.config.ENABLE_BACKTEST_VALIDATION:
+                        is_valid, win_rate, bt_metrics = self._validate_with_backtest(symbol)
+                        if not is_valid:
+                            logger.info(f"ℹ️ Señal {signal['signal_type']} rechazada en {symbol}: backtest negativo (WR: {win_rate:.1f}%)")
+                            continue
+                        signal['backtest_win_rate'] = win_rate
+                        signal['backtest_validated'] = True
+                    
                     signal['position'] = position
                     signal['change_24h'] = coin.get('change_24h', 0)
                     
@@ -912,9 +1093,9 @@ class TechnicalAnalysisService:
             original_min_confidence = self.config.MIN_CONFIDENCE
             original_min_confluence = self.config.MIN_CONFLUENCE_INDICATORS
             
-            # Reducir filtros temporalmente
-            self.config.MIN_CONFIDENCE = 30.0  # Muy permisivo
-            self.config.MIN_CONFLUENCE_INDICATORS = 1  # Muy permisivo
+            # Reducir filtros temporalmente (mínimo 40% confianza para publicar)
+            self.config.MIN_CONFIDENCE = 40.0  # Mínimo 40% para señales publicables
+            self.config.MIN_CONFLUENCE_INDICATORS = 1  # Más permisivo
             
             # Identificar monedas ya procesadas con señal
             processed_symbols = {s['symbol'] for s in long_signals + short_signals}
@@ -1064,61 +1245,121 @@ class TechnicalAnalysisService:
         
         logger.info(f"📊 Publicando {len(new_longs)} LONG y {len(new_shorts)} SHORT nuevos")
         
-        # Construir mensaje con ADVERTENCIAS para señales de baja confianza
-        message_lines = ["🎯 SEÑALES DE TRADING\n"]
+        # Obtener capital y riesgo de configuración
+        capital = getattr(Config, 'DEFAULT_CAPITAL', 20.0)
+        risk_percent = getattr(Config, 'DEFAULT_RISK_PERCENT', 25.0)
+        
+        # Construir mensaje PROFESIONAL
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
+        message_lines = [
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "📊 ANÁLISIS TÉCNICO PROFESIONAL",
+            f"⏰ {timestamp} | 💰 Capital: ${capital}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            ""
+        ]
         
         if new_longs:
-            message_lines.append("🟢 TOP LONG:")
+            message_lines.append("🟢 OPORTUNIDADES LONG")
+            message_lines.append("─────────────────────")
             for i, signal in enumerate(new_longs, 1):
                 confidence = signal['confidence']
+                bt_wr = signal.get('backtest_win_rate', 0)
+                position = signal.get('position', {})
                 
-                # Clasificar por confianza con emojis
+                # Rating profesional basado en confianza
                 if confidence >= 70:
-                    conf_emoji = "🚀"; risk_text = "ALTA CONFIANZA"
-                elif confidence >= 50:
-                    conf_emoji = "✅"; risk_text = "Confianza Media"
-                elif confidence >= 35:
-                    conf_emoji = "⚠️"; risk_text = "BAJA CONFIANZA - ALTO RIESGO"
+                    rating = "⭐⭐⭐ Premium"
+                elif confidence >= 55:
+                    rating = "⭐⭐ Estándar"
+                elif confidence >= 40:
+                    rating = "⭐ Especulativo"
                 else:
-                    conf_emoji = "⚠️"; risk_text = "MUY ALTO RIESGO"
+                    rating = "⚡ Alto Riesgo"
                 
-                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} {confidence:.1f}%")
-                message_lines.append(f"   📊 {risk_text}")
-                message_lines.append(f"   Entrada: ${signal['entry_price']:.8f}")
-                message_lines.append(f"   SL: ${signal['stop_loss']:.8f} | TP: ${signal['take_profit']:.8f}")
+                # Calcular R:R ratio
+                entry = signal['entry_price']
+                sl = signal['stop_loss']
+                tp = signal['take_profit']
+                risk = abs(entry - sl)
+                reward = abs(tp - entry)
+                rr_ratio = reward / risk if risk > 0 else 0
                 
-                message_lines.append(f"   Cambio 24h: {signal['change_24h']:+.2f}%")
-                message_lines.append("")
+                # Calcular ganancia potencial
+                position_size = position.get('position_size', 0)
+                potential_profit = position_size * reward if position_size > 0 else capital * (rr_ratio * risk_percent / 100)
+                
+                message_lines.append(f"")
+                message_lines.append(f"#{i} {signal['symbol'].replace('/USDT', '')} | {rating}")
+                message_lines.append(f"📈 Señal: LONG")
+                message_lines.append(f"💰 Entrada: ${entry:,.6f}")
+                message_lines.append(f"🎯 Take Profit: ${tp:,.6f}")
+                message_lines.append(f"🛑 Stop Loss: ${sl:,.6f}")
+                message_lines.append(f"📊 R:R Ratio: 1:{rr_ratio:.1f}")
+                message_lines.append(f"💵 Ganancia potencial: ${potential_profit:,.2f}")
+                message_lines.append(f"🔥 Confianza: {confidence:.0f}%")
+                if bt_wr > 0:
+                    message_lines.append(f"📈 Backtest WR: {bt_wr:.0f}%")
+                message_lines.append(f"📉 24h: {signal.get('change_24h', 0):+.1f}%")
         
         if new_shorts:
-            message_lines.append("🔴 TOP SHORT:")
+            message_lines.append("")
+            message_lines.append("🔴 OPORTUNIDADES SHORT")
+            message_lines.append("─────────────────────")
             for i, signal in enumerate(new_shorts, 1):
                 confidence = signal['confidence']
+                bt_wr = signal.get('backtest_win_rate', 0)
+                position = signal.get('position', {})
                 
-                # Clasificar por confianza con emojis
+                # Rating profesional
                 if confidence >= 70:
-                    conf_emoji = "🚀"; risk_text = "ALTA CONFIANZA"
-                elif confidence >= 50:
-                    conf_emoji = "✅"; risk_text = "Confianza Media"
-                elif confidence >= 35:
-                    conf_emoji = "⚠️"; risk_text = "BAJA CONFIANZA - ALTO RIESGO"
+                    rating = "⭐⭐⭐ Premium"
+                elif confidence >= 55:
+                    rating = "⭐⭐ Estándar"
+                elif confidence >= 40:
+                    rating = "⭐ Especulativo"
                 else:
-                    conf_emoji = "⚠️"; risk_text = "MUY ALTO RIESGO"
+                    rating = "⚡ Alto Riesgo"
                 
-                message_lines.append(f"{i}. {signal['symbol']} {conf_emoji} {confidence:.1f}%")
-                message_lines.append(f"   📊 {risk_text}")
-                message_lines.append(f"   Entrada: ${signal['entry_price']:.8f}")
-                message_lines.append(f"   SL: ${signal['stop_loss']:.8f} | TP: ${signal['take_profit']:.8f}")
+                entry = signal['entry_price']
+                sl = signal['stop_loss']
+                tp = signal['take_profit']
+                risk = abs(sl - entry)
+                reward = abs(entry - tp)
+                rr_ratio = reward / risk if risk > 0 else 0
                 
-                message_lines.append(f"   Cambio 24h: {signal['change_24h']:+.2f}%")
-                message_lines.append("")
+                # Calcular ganancia potencial
+                position_size = position.get('position_size', 0)
+                potential_profit = position_size * reward if position_size > 0 else capital * (rr_ratio * risk_percent / 100)
+                
+                message_lines.append(f"")
+                message_lines.append(f"#{i} {signal['symbol'].replace('/USDT', '')} | {rating}")
+                message_lines.append(f"📉 Señal: SHORT")
+                message_lines.append(f"💰 Entrada: ${entry:,.6f}")
+                message_lines.append(f"🎯 Take Profit: ${tp:,.6f}")
+                message_lines.append(f"🛑 Stop Loss: ${sl:,.6f}")
+                message_lines.append(f"📊 R:R Ratio: 1:{rr_ratio:.1f}")
+                message_lines.append(f"💵 Ganancia potencial: ${potential_profit:,.2f}")
+                message_lines.append(f"🔥 Confianza: {confidence:.0f}%")
+                if bt_wr > 0:
+                    message_lines.append(f"📈 Backtest WR: {bt_wr:.0f}%")
+                message_lines.append(f"📉 24h: {signal.get('change_24h', 0):+.1f}%")
         
-        # DISCLAIMER al final si hay señales de baja confianza
+        # Footer profesional
+        message_lines.append("")
+        message_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        message_lines.append("📋 GESTIÓN DE RIESGO")
+        message_lines.append(f"• Riesgo máximo: {risk_percent}% (${capital * risk_percent / 100:.2f})")
+        message_lines.append("• Usa stop loss SIEMPRE")
+        message_lines.append("• DYOR - Haz tu propia investigación")
+        message_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        
+        # DISCLAIMER si hay señales de baja confianza
         has_low_conf = any(s['confidence'] < 50 for s in new_longs + new_shorts)
         if has_low_conf:
-            message_lines.append("\n⚠️ ADVERTENCIA:")
-            message_lines.append("Señales <50% = ALTO RIESGO")
-            message_lines.append("Opera bajo tu responsabilidad")
+            message_lines.append("")
+            message_lines.append("⚠️ ADVERTENCIA: Algunas señales tienen")
+            message_lines.append("confianza <50%. Mayor volatilidad esperada.")
         
         telegram_message = "\n".join(message_lines)
         

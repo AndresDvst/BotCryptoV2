@@ -1,0 +1,8 @@
+{
+    "passwords": {
+        "TELEGRAM_BOT_CRYPTO": "",
+        "TELEGRAM_BOT_MARKETS": "",
+        "TELEGRAM_BOT_SIGNALS": ""
+    },
+    "_comment": "ESTE ARCHIVO ES UNA PLANTILLA. NO ALMACENAR TOKENS REALES AQUÍ. Usar variables de entorno en .env"
+}

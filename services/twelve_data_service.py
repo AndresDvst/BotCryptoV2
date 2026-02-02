@@ -171,6 +171,45 @@ class TwelveDataService:
             'timestamp': time.time()
         }
     
+    def _convert_symbol_for_twelvedata(self, symbol: str, asset_type: str) -> Optional[str]:
+        """
+        Convierte símbolos de Yahoo Finance a formato Twelve Data.
+        
+        Args:
+            symbol: Símbolo en formato Yahoo Finance (ej: 'CADJPY=X', 'GC=F')
+            asset_type: 'forex' o 'commodity'
+            
+        Returns:
+            Símbolo en formato Twelve Data (ej: 'CAD/JPY', 'GLD') o None si no está disponible
+        """
+        if asset_type == 'forex':
+            # Usar mapeo de config
+            forex_map = getattr(Config, 'FOREX_YAHOO_TO_TWELVE', {})
+            if symbol in forex_map:
+                mapped = forex_map[symbol]
+                if mapped is None:
+                    logger.debug(f"⚠️ {symbol} no disponible en Twelve Data (plan free)")
+                    return None
+                return mapped
+            # Intentar convertir automáticamente (CADJPY -> CAD/JPY)
+            clean = symbol.replace('=X', '')
+            if len(clean) == 6:
+                return f"{clean[:3]}/{clean[3:]}"
+            return symbol
+            
+        elif asset_type == 'commodity':
+            # Usar mapeo de config (ahora usa ETFs)
+            commodity_map = getattr(Config, 'COMMODITIES_YAHOO_TO_TWELVE', {})
+            if symbol in commodity_map:
+                mapped = commodity_map[symbol]
+                if mapped is None:
+                    logger.debug(f"⚠️ {symbol} no disponible en Twelve Data (plan free)")
+                    return None
+                return mapped
+            return symbol
+            
+        return symbol
+    
     def analyze_top_instruments(self, top_stocks: list, top_forex: list, 
                                 top_commodities: list) -> Dict[str, List[Dict]]:
         """
@@ -196,39 +235,41 @@ class TwelveDataService:
         # Stocks (5 símbolos × 3 requests = 15)
         logger.info("📈 Analizando acciones...")
         for stock in top_stocks[:5]:
-            # Limpiar nombre si viene con descripción (ej: "AAPL (Apple)")
             symbol = stock.split(' ')[0]
-            signal = self.get_technical_signal(symbol, interval='1h', exchange='NYSE') # Assumed NYSE/NASDAQ default
+            signal = self.get_technical_signal(symbol, interval='1h', exchange='NYSE')
             if signal:
                 results['stocks'].append(signal)
-            time.sleep(1.5)  # Rate limiting (8 requests/min free tier usually allows 8/minute so we need >= 8s delay total per batch.. 
-            # Free tier standard 12 data is 8 requests/minute.
-            # If we make 3 requests per symbol, 1 symbol takes <1s.
-            # We need to be careful. 8 req/min = 1 req / 7.5s.
-            # If User has paid plan, it's faster. Assuming free tier safe mode:
-            # Let's use 8s delay between symbols if errors occur, but assume reasonable limit.
-            # Better to be safe: 
-            time.sleep(8) 
+            time.sleep(8)
         
-        # Forex (5 pares)
+        # Forex (5 pares) - USAR CONVERSIÓN DE SÍMBOLOS
         logger.info("💱 Analizando divisas...")
         for pair in top_forex[:5]:
-            symbol = pair.split(' ')[0]
-            signal = self.get_technical_signal(symbol, interval='1h', exchange='FOREX')
+            raw_symbol = pair.split(' ')[0]
+            # Convertir a formato Twelve Data (CADJPY=X -> CAD/JPY)
+            symbol = self._convert_symbol_for_twelvedata(raw_symbol, 'forex')
+            if symbol is None:
+                logger.debug(f"⏭️ Forex: {raw_symbol} omitido (no disponible en plan free)")
+                continue
+            logger.debug(f"📊 Forex: {raw_symbol} -> {symbol}")
+            signal = self.get_technical_signal(symbol, interval='1h', exchange=None)  # Forex no necesita exchange
             if signal:
+                signal['original_symbol'] = raw_symbol  # Guardar símbolo original
                 results['forex'].append(signal)
             time.sleep(8)
         
-        # Commodities (3 símbolos)
+        # Commodities (3 símbolos) - USAR CONVERSIÓN DE SÍMBOLOS (ahora usa ETFs)
         logger.info("🛢️ Analizando commodities...")
         for commodity in top_commodities[:3]:
-            # Mapeo de nombres comunes a símbolos 12Data si es necesario
-            # Pero asumiremos que vienen como símbolos (GC, CL, etc o XAU/USD)
-            # Twelve data usa symbols como XAU/USD, WTI, etc.
-            # Usaremos los del Config map si es posible, o directos.
-            symbol = commodity.split(' ')[0]
-            signal = self.get_technical_signal(symbol, interval='1h', exchange=None)
+            raw_symbol = commodity.split(' ')[0]
+            # Convertir a formato Twelve Data (GC=F -> GLD ETF)
+            symbol = self._convert_symbol_for_twelvedata(raw_symbol, 'commodity')
+            if symbol is None:
+                logger.debug(f"⏭️ Commodity: {raw_symbol} omitido (no disponible en plan free)")
+                continue
+            logger.debug(f"📊 Commodity: {raw_symbol} -> {symbol}")
+            signal = self.get_technical_signal(symbol, interval='1h', exchange='NYSE')  # ETFs cotizan en NYSE
             if signal:
+                signal['original_symbol'] = raw_symbol  # Guardar símbolo original
                 results['commodities'].append(signal)
             time.sleep(8)
         

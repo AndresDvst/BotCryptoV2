@@ -86,5 +86,8 @@ contraseñasBOTS.json
 *.sqlite
 *.sqlite3
 
+# Resultados de backtests (generados)
+backtest_results/
+
 # Archivos de configuración local
 config.local.py

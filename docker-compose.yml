@@ -1,0 +1,71 @@
+# ============================================
+# BotCryptoV2 - Docker Compose
+# ============================================
+
+services:
+  cryptobot:
+    build: .
+    container_name: cryptobot
+    restart: unless-stopped
+    
+    # Variables de entorno (copia tu .env o define aquí)
+    env_file:
+      - .env
+    
+    environment:
+      - DISPLAY=:99
+      - DOCKER_ENV=true
+      - TZ=America/Bogota  # Cambia a tu zona horaria
+    
+    # Puertos
+    ports:
+      - "6080:6080"   # noVNC - Acceso web al navegador
+      - "5900:5900"   # VNC directo (opcional, para clientes VNC)
+    
+    # Volúmenes persistentes (IMPORTANTE para la sesión)
+    volumes:
+      # Perfil de Chrome - AQUÍ SE GUARDA LA SESIÓN DE TWITTER
+      - ./chrome_profile:/app/chrome_profile
+      # Logs
+      - ./logs:/app/logs
+      # Historiales
+      - ./news_history.json:/app/news_history.json
+      - ./signals_history.json:/app/signals_history.json
+      - ./stats_history.json:/app/stats_history.json
+      - ./tweet_history.json:/app/tweet_history.json
+      - ./traditional_signals_history.json:/app/traditional_signals_history.json
+    
+    # Recursos (ajusta según tu VPS)
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 1G
+    
+    # Healthcheck
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# ============================================
+# Para desarrollo/debug con MySQL local:
+# ============================================
+#   mysql:
+#     image: mysql:8.0
+#     container_name: cryptobot-mysql
+#     restart: unless-stopped
+#     environment:
+#       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+#       MYSQL_DATABASE: ${MYSQL_DATABASE:-cryptobot}
+#     ports:
+#       - "3306:3306"
+#     volumes:
+#       - mysql_data:/var/lib/mysql
+#       - ./database/v3_schema.sql:/docker-entrypoint-initdb.d/schema.sql
+#
+# volumes:
+#   mysql_data:

@@ -5,12 +5,21 @@ Envía reportes y análisis al bot de Telegram configurado.
 """
 import os
 import time
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from config.config import Config
 from utils.logger import logger
+from utils.security import sanitize_exception, get_redactor
 from .telegram_templates import TelegramMessageTemplates
+
+# Registrar secretos para sanitización
+try:
+    get_redactor().register_secrets_from_config(Config)
+except Exception:
+    pass
+
 
 class TelegramService:
     """Servicio para enviar mensajes a Telegram"""
@@ -77,11 +86,12 @@ class TelegramService:
                 }
                 response = self._post_with_retries(url, json=payload, timeout=12)
                 if response.status_code != 200:
-                    logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
+                    # Sanitizar respuesta para evitar exponer tokens
+                    logger.error(f"❌ Error Telegram ({response.status_code})")
                     return False
             return True
         except Exception as e:
-            logger.error(f"❌ Excepción Telegram: {e}")
+            logger.error(f"❌ Excepción Telegram: {sanitize_exception(e)}")
             return False
 
     def _post_with_retries(self, url: str, json: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, files: Optional[Dict[str, Any]] = None, timeout: int = 10) -> requests.Response:
@@ -481,17 +491,57 @@ class TelegramService:
                     reason = item.get('reason', '').strip()
                     message += f"{i}. <b>{sym}</b> — {reason}\n"
         else:
-            message += f"\n<b>🤖 Recomendación de IA:</b>\n"
-            recommendation = analysis.get('recommendation', '')
-            recommendation = recommendation.replace('**', '').replace('*', '').strip()
-            if recommendation and recommendation.lower() != 'n/a':
-                first_line = recommendation.split('\n')[0].strip()
-                message += f"{first_line}\n"
+            # Generar recomendación automática basada en datos del mercado
+            message += f"\n<b>🤖 Análisis Automatizado:</b>\n"
+            
+            # Usar los datos locales calculados arriba (coins_up, coins_down)
+            fg_value = fear_greed.get('value', 50) if isinstance(fear_greed, dict) else 50
+            
+            # Determinar sentimiento y recomendación
+            if fg_value <= 25:
+                sentiment_advice = "📉 Mercado en <b>Miedo Extremo</b> - Posible zona de acumulación para inversores de largo plazo."
+            elif fg_value <= 45:
+                sentiment_advice = "⚠️ Mercado en <b>Miedo</b> - Cautela recomendada, buscar soportes fuertes."
+            elif fg_value <= 55:
+                sentiment_advice = "⚖️ Mercado <b>Neutral</b> - Sin sesgo claro, operar con stops ajustados."
+            elif fg_value <= 75:
+                sentiment_advice = "📈 Mercado en <b>Codicia</b> - Momentum alcista, proteger ganancias."
             else:
-                message += "Análisis completado. Revisar oportunidades en el mercado.\n"
+                sentiment_advice = "🚨 Mercado en <b>Codicia Extrema</b> - Alto riesgo de corrección."
+            
+            message += f"{sentiment_advice}\n\n"
+            
+            # Top movers del día (usar coins_up y coins_down locales)
+            if coins_up:
+                top_up = coins_up[0]
+                sym = top_up.get('symbol', 'N/A').replace('/USDT', '')
+                chg = top_up.get('change_24h', 0)
+                message += f"🚀 <b>Mayor subida:</b> {sym} ({chg:+.1f}%)\n"
+            
+            if coins_down:
+                top_down = coins_down[0]
+                sym = top_down.get('symbol', 'N/A').replace('/USDT', '')
+                chg = top_down.get('change_24h', 0)
+                message += f"📉 <b>Mayor caída:</b> {sym} ({chg:+.1f}%)\n"
         
-        # Nivel de confianza
+        # Nivel de confianza - calcular automáticamente si es 0
         confidence = analysis.get('confidence_level', 0)
+        if confidence == 0:
+            # Calcular confianza basada en datos disponibles
+            fg_value = fear_greed.get('value', 50) if isinstance(fear_greed, dict) else 50
+            if 30 <= fg_value <= 70:
+                confidence = 6  # Mercado estable
+            elif 20 <= fg_value <= 80:
+                confidence = 5  # Algo de volatilidad
+            else:
+                confidence = 4  # Alta volatilidad
+            
+            # Bonus si hay muchos datos
+            if len(coins_up) >= 5:
+                confidence = min(10, confidence + 1)
+            if len(coins_down) >= 5:
+                confidence = min(10, confidence + 1)
+        
         confidence_bar = "🟢" * confidence + "⚪" * (10 - confidence)
         message += f"\n<b>📊 Confianza:</b> {confidence_bar} ({confidence}/10)\n"
         

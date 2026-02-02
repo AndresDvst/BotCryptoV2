@@ -14,6 +14,7 @@ from services.technical_analysis_service import TechnicalAnalysisService
 from services.price_monitor_service import PriceMonitorService
 from services.tradingview_news_service import TradingViewNewsService
 from services.news_service import NewsService
+from services.backtest_service import BacktestService
 from config.config import Config
 from utils.logger import logger
 from datetime import datetime, timedelta
@@ -43,6 +44,15 @@ class CryptoBotOrchestrator:
     class CriticalError(Exception):
         """Error crítico que aborta el ciclo"""
 
+    class _PerfCtx:
+        """Context manager auxiliar para medir tiempos de ejecución"""
+        def __init__(self, end_fn):
+            self._end = end_fn
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self._end()
+
     class PerformanceTracker:
         """Context manager para medir tiempos de pasos"""
         def __init__(self):
@@ -52,7 +62,7 @@ class CryptoBotOrchestrator:
             def _end():
                 elapsed = time.time() - start
                 self._steps.append((name, elapsed))
-            return _PerfCtx(_end)
+            return CryptoBotOrchestrator._PerfCtx(_end)
         def summary(self) -> List[Tuple[str, float]]:
             return sorted(self._steps, key=lambda x: x[1], reverse=True)
 
@@ -102,6 +112,7 @@ class CryptoBotOrchestrator:
         self._init_service("price_monitor", lambda: PriceMonitorService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter")), critical=False)
         self._init_service("news_service", lambda: NewsService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
         self._init_service("tradingview_news", lambda: TradingViewNewsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
+        self._init_service("backtest", lambda: BacktestService(self._services.get("binance")), critical=False)
 
     def _bind_service_attrs(self) -> None:
         """Expone servicios como atributos para compatibilidad"""
@@ -116,6 +127,7 @@ class CryptoBotOrchestrator:
         self.price_monitor = self._services.get("price_monitor")
         self.news_service = self._services.get("news_service")
         self.tradingview_news = self._services.get("tradingview_news")
+        self.backtest = self._services.get("backtest")
 
     def _load_last_publication_time(self) -> Dict[str, float]:
         """Carga timestamps por categoría desde JSON"""
@@ -185,7 +197,11 @@ class CryptoBotOrchestrator:
         with perf.step("technical_analysis"):
             technical_signals = None
             if self.technical_analysis:
-                technical_signals = self.technical_analysis.analyze_significant_coins(significant_coins)
+                technical_signals = self.technical_analysis.analyze_significant_coins(
+                    significant_coins,
+                    telegram=self.telegram,
+                    twitter=self.twitter
+                )
         with perf.step("market_sentiment"):
             market_data = None
             if self.market_sentiment:
@@ -326,13 +342,13 @@ class CryptoBotOrchestrator:
                 # --- NOTICIAS ---
                 if self.news_service:
                     try:
-                        self.news_service.publish_news()
+                        self.news_service.run_news_scraping_cycle()
                     except Exception as e:
                         logger.error(f"❌ Error en ciclo de noticias: {e}")
 
                 if self.tradingview_news and not is_morning: # Evitar duplicar con reporte matutino
                      try:
-                        self.tradingview_news.run_news_cycle()
+                        self.tradingview_news.process_and_publish()
                      except Exception as e:
                         logger.error(f"❌ Error en ciclo de noticias TradingView: {e}")
 

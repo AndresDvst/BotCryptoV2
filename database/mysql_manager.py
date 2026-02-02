@@ -2,6 +2,7 @@
 Gestor de base de datos MySQL para el bot de criptomonedas
 """
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -13,11 +14,14 @@ from config.config import Config
 class MySQLManager:
     """Gestor de base de datos MySQL para almacenar análisis históricos"""
     
+    # Patrón para validar nombres de base de datos seguros
+    _SAFE_DB_NAME_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$')
+    
     def __init__(
         self,
         host: str = getattr(Config, 'MYSQL_HOST', 'localhost'),
         user: str = getattr(Config, 'MYSQL_USER', 'root'),
-        password: str = getattr(Config, 'MYSQL_PASSWORD', '1234'),
+        password: str = getattr(Config, 'MYSQL_PASSWORD', None),
         database: str = getattr(Config, 'MYSQL_DATABASE', 'crypto_bot'),
         port: int = getattr(Config, 'MYSQL_PORT', 3306)
     ):
@@ -33,9 +37,16 @@ class MySQLManager:
         """
         self.host = host or getattr(Config, 'MYSQL_HOST', 'localhost')
         self.user = user or getattr(Config, 'MYSQL_USER', 'root')
-        self.password = password or getattr(Config, 'MYSQL_PASSWORD', '1234')
+        # SEGURIDAD: No usar contraseña por defecto - debe configurarse en .env
+        self.password = password or getattr(Config, 'MYSQL_PASSWORD', None)
+        if not self.password:
+            raise ValueError("MYSQL_PASSWORD no configurada. Configúrala en .env")
         self.database = database or getattr(Config, 'MYSQL_DATABASE', 'crypto_bot')
         self.port = port or getattr(Config, 'MYSQL_PORT', 3306)
+        
+        # Validar nombre de base de datos antes de usarlo
+        if not self._validate_database_name(self.database):
+            raise ValueError(f"Nombre de base de datos no seguro: {self.database}")
         
         # Crear base de datos y tablas si no existen
         self.init_database()
@@ -66,14 +77,25 @@ class MySQLManager:
             logger.error(f"❌ Error conectando a MySQL: {e}")
             raise
     
+    def _validate_database_name(self, name: str) -> bool:
+        """Valida que el nombre de la base de datos sea seguro."""
+        if not name or len(name) > 64:
+            return False
+        return bool(self._SAFE_DB_NAME_PATTERN.match(name))
+    
     def init_database(self) -> None:
         """Crea la base de datos y tablas si no existen"""
         try:
+            # Validar nombre antes de usarlo (doble verificación)
+            if not self._validate_database_name(self.database):
+                raise ValueError(f"Nombre de base de datos no seguro: {self.database}")
+            
             # Crear base de datos si no existe
             conn = self.get_connection(use_db=False)
             cursor = conn.cursor()
             
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.database}")
+            # Usar backticks para escapar el nombre de la base de datos
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{self.database}`")
             logger.info(f"✅ Base de datos '{self.database}' verificada/creada")
             
             cursor.close()

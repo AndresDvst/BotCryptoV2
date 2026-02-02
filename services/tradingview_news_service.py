@@ -78,7 +78,14 @@ class TradingViewNewsService:
         if os.path.exists(self.HISTORY_FILE):
             try:
                 with open(self.HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    content = f.read().strip()
+                    if not content:
+                        logger.debug("📰 Historial de noticias vacío, iniciando nuevo")
+                        return []
+                    return json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ Historial de noticias corrupto, reiniciando: {e}")
+                return []
             except Exception as e:
                 logger.warning(f"⚠️ Error cargando historial de noticias: {e}")
         return []

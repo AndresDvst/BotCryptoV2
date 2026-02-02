@@ -15,15 +15,21 @@ from datetime import datetime, timedelta
 from bot_orchestrator import CryptoBotOrchestrator
 from config.config import Config
 from utils.logger import logger
+from services.telegram_message_tester import TelegramMessageTester
 
 class BotManager:
     """Gestor de instancia única del orquestador"""
     def __init__(self):
         self._bot: Optional[CryptoBotOrchestrator] = None
+        self._message_tester: Optional[TelegramMessageTester] = None
     def get_bot(self) -> CryptoBotOrchestrator:
         if self._bot is None:
             self._bot = CryptoBotOrchestrator()
         return self._bot
+    def get_message_tester(self) -> TelegramMessageTester:
+        if self._message_tester is None:
+            self._message_tester = TelegramMessageTester(self.get_bot().telegram)
+        return self._message_tester
     def restart(self) -> CryptoBotOrchestrator:
         if self._bot:
             try:
@@ -31,6 +37,7 @@ class BotManager:
             except Exception:
                 pass
         self._bot = CryptoBotOrchestrator()
+        self._message_tester = None  # Reset tester on restart
         return self._bot
 
 @dataclass
@@ -52,6 +59,7 @@ def post_execution_menu(manager: BotManager):
         print("1. 🔙 Volver al menú principal")
         print("2. 🔁 Reiniciar bot")
         print("3. ⏰ Modo Espera Inteligente")
+        print("4. 🧪 Prueba de Mensajes Telegram")
         print("0. 👋 Salir")
         print("=" * 60)
         
@@ -64,6 +72,9 @@ def post_execution_menu(manager: BotManager):
         elif choice == '3':
             run_smart_wait_mode(manager)
             return 'menu'  # Si sale del modo espera
+        elif choice == '4':
+            manager.get_message_tester().show_menu()
+            continue  # Volver a mostrar el menú post-tarea
         elif choice == '0':
             return 'exit'
         else:
@@ -71,25 +82,29 @@ def post_execution_menu(manager: BotManager):
 
 def run_complete_cycle(manager: BotManager):
     """
-    Ejecuta el ciclo completo: análisis básico + mercados tradicionales + 
-    análisis técnico + noticias + modo continuo.
+    Ejecuta el ciclo completo: análisis básico + top monedas + mercados tradicionales + 
+    noticias + modo continuo.
     """
     logger.info("\n🌟 INICIANDO CICLO COMPLETO DE ANÁLISIS")
     logger.info("=" * 60)
     
-    # 1. Análisis básico de crypto
-    logger.info("\n📊 PASO 1/5: Análisis básico de criptomonedas...")
+    # 1. Análisis grande de crypto (112 monedas con cambios significativos)
+    logger.info("\n📊 PASO 1/5: Análisis de criptomonedas con cambios significativos...")
     manager.get_bot().run_analysis_cycle(is_morning=False)
     
-    # 2. Mercados tradicionales
-    logger.info("\n📈 PASO 2/5: Análisis de mercados tradicionales...")
-    manager.get_bot().traditional_markets.run_traditional_markets_analysis()
+    # 2. Análisis exhaustivo de Top Monedas + LTC (mínimo 2 señales)
+    logger.info("\n🎯 PASO 2/5: Análisis exhaustivo de Top Monedas + LTC...")
+    capital = getattr(Config, 'DEFAULT_CAPITAL', 20)
+    risk_percent = getattr(Config, 'DEFAULT_RISK_PERCENT', 25)
+    manager.get_bot().technical_analysis.run_technical_analysis(
+        capital, risk_percent,
+        telegram=manager.get_bot().telegram,
+        twitter=manager.get_bot().twitter
+    )
     
-    # 3. Análisis técnico
-    logger.info("\n🎯 PASO 3/5: Análisis técnico con señales de trading...")
-    capital = 100  # Capital por defecto (usuario solicitó $100)
-    risk_percent = 30  # Riesgo por defecto (usuario solicitó 30%)
-    manager.get_bot().technical_analysis.run_technical_analysis(capital, risk_percent)
+    # 3. Mercados tradicionales
+    logger.info("\n📈 PASO 3/5: Análisis de mercados tradicionales...")
+    manager.get_bot().traditional_markets.run_traditional_markets_analysis()
     
     # 4. Scraping de noticias (TradingView)
     logger.info("\n📰 PASO 4/5: Scraping de noticias TradingView...")
@@ -132,12 +147,14 @@ def run_smart_wait_mode(manager: BotManager):
     Ejecuta el modo de espera inteligente:
     - Cada 5 min: Monitoreo de pumps/dumps
     - Cada 2 horas: Ciclo completo de análisis
+    - Tecla 't': Prueba de mensajes Telegram
     """
     logger.info("\n⏰ INICIANDO MODO ESPERA INTELIGENTE")
     logger.info("=" * 60)
     logger.info("🕒 Ciclo de monitoreo:     5 minutos")
     logger.info("📰 Noticias TradingView:   12 minutos")
     logger.info("🌟 Ciclo completo:         2 horas")
+    logger.info("📝 Tecla 't':              Prueba de mensajes")
     logger.info("🛑 Presiona Ctrl+C para detener")
     logger.info("=" * 60)
     
@@ -191,7 +208,7 @@ def run_smart_wait_mode(manager: BotManager):
             news_str = f"{news_wait//60:02d}:{news_wait%60:02d}"
             cycle_str = f"{cycle_wait//3600:02d}:{(cycle_wait%3600)//60:02d}:{cycle_wait%60:02d}"
             
-            print(f"\r⏳ Monitoreo {monitor_str} | Noticias {news_str} | Ciclo {cycle_str}", end="")
+            print(f"\r⏳ Monitoreo {monitor_str} | Noticias {news_str} | Ciclo {cycle_str} | [t]=Test", end="")
             
             # Sleep dinámico: despertar cuando toque lo más próximo, pero max 60s para actualizar display
             next_event_in = min(
@@ -203,7 +220,34 @@ def run_smart_wait_mode(manager: BotManager):
             time.sleep(sleep_seconds)
             
     except KeyboardInterrupt:
-        logger.info("\n\n👋 Modo espera detenido por usuario")
+        logger.info("\n\n⏸️ Modo espera pausado")
+        # Mostrar menú de opciones
+        while True:
+            print("\n" + "=" * 60)
+            print("⏸️ MODO ESPERA - PAUSADO")
+            print("=" * 60)
+            print("1. ▶️  Continuar modo espera")
+            print("2. 📝 Prueba de mensajes Telegram")
+            print("3. 🔙 Volver al menú principal")
+            print("0. 👋 Salir")
+            print("=" * 60)
+            
+            choice = input("\nSelecciona una opción: ").strip()
+            
+            if choice == '1':
+                # Reiniciar modo espera
+                run_smart_wait_mode(manager)
+                return
+            elif choice == '2':
+                manager.get_message_tester().show_menu()
+                continue
+            elif choice == '3':
+                return  # Volver al menú principal
+            elif choice == '0':
+                logger.info("👋 Saliendo...")
+                sys.exit(0)
+            else:
+                print("⚠️ Opción no válida")
 
 def main():
     """Función principal del bot"""
@@ -241,6 +285,8 @@ def main():
                 MenuOption('10', '📰 Scraping de Noticias TradingView', '📰', lambda m: m.get_bot().tradingview_news.process_and_publish()),
                 MenuOption('11', '🔁 Reiniciar Bot (útil para pruebas)', '🔁', lambda m: m.restart()),
                 MenuOption('12', '⏰ Modo Espera Inteligente (Monitoreo + Noticias + Ciclo 2h)', '⏰', lambda m: run_smart_wait_mode(m)),
+                MenuOption('13', '🧪 Backtesting (Probar estrategias con datos históricos)', '🧪', lambda m: m.get_bot().backtest.interactive_backtest() if m.get_bot().backtest else print("❌ Servicio de backtest no disponible")),
+                MenuOption('14', '📝 Prueba de Mensajes Telegram (Formato)', '📝', lambda m: m.get_message_tester().show_menu()),
             ]
             for opt in options:
                 print(f"{opt.number}. {opt.label}")

@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Set, Optional, Tuple, Any
 from utils.logger import logger
+from utils.security import sanitize_exception
 from services.binance_service import BinanceService
 from services.telegram_service import TelegramService
 from services.twitter_service import TwitterService
@@ -34,6 +35,10 @@ class PriceMonitorService:
         self.stop_event = threading.Event()
         self.is_running = False
 
+        # Thread-safety para cache de precios
+        self._cache_lock = threading.RLock()
+        self._pairs_lock = threading.RLock()
+        
         self.price_cache: Dict[str, Dict[str, Any]] = {}
         self.known_pairs: Set[str] = set()
         
@@ -158,27 +163,31 @@ class PriceMonitorService:
             # Ordenar por volumen y tomar top 50
             sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1].get('quoteVolume', 0), reverse=True)[:50]
             
-            for symbol, ticker in sorted_pairs:
-                self.price_cache[symbol] = {
-                    "price": ticker.get("last", 0),
-                    "timestamp": time.time(),
-                }
+            with self._cache_lock:
+                for symbol, ticker in sorted_pairs:
+                    self.price_cache[symbol] = {
+                        "price": ticker.get("last", 0),
+                        "timestamp": time.time(),
+                    }
             
             logger.info(f"✅ Cache de precios inicializado con {len(self.price_cache)} pares")
             
         except Exception as e:
-            logger.error(f"❌ Error inicializando cache de precios: {e}")
-            self.price_cache = {}
+            logger.error(f"❌ Error inicializando cache de precios: {sanitize_exception(e)}")
+            with self._cache_lock:
+                self.price_cache = {}
     
     def _cleanup_price_cache(self) -> None:
+        """Limpia entradas expiradas del cache de precios (thread-safe)"""
         now = time.time()
         to_delete = []
-        for symbol, entry in self.price_cache.items():
-            ts = entry.get("timestamp", 0)
-            if ts and now - ts > self.price_cache_ttl:
-                to_delete.append(symbol)
-        for symbol in to_delete:
-            self.price_cache.pop(symbol, None)
+        with self._cache_lock:
+            for symbol, entry in self.price_cache.items():
+                ts = entry.get("timestamp", 0)
+                if ts and now - ts > self.price_cache_ttl:
+                    to_delete.append(symbol)
+            for symbol in to_delete:
+                self.price_cache.pop(symbol, None)
 
     def _check_price_movements(self, tickers: Dict[str, Dict[str, Any]]):
         """Detecta pumps y dumps comparando precios actuales con cache"""
@@ -186,7 +195,11 @@ class PriceMonitorService:
             alerts = []
             self._cleanup_price_cache()
 
-            for symbol, entry in list(self.price_cache.items()):
+            # Thread-safe iteration over price cache
+            with self._cache_lock:
+                cache_snapshot = dict(self.price_cache)
+            
+            for symbol, entry in cache_snapshot.items():
                 old_price = float(entry.get("price", 0))
                 if symbol not in tickers:
                     continue
@@ -210,10 +223,12 @@ class PriceMonitorService:
                         
                         alerts.append(alert)
                         
-                        self.price_cache[symbol] = {
-                            "price": current_price,
-                            "timestamp": time.time(),
-                        }
+                        # Thread-safe update
+                        with self._cache_lock:
+                            self.price_cache[symbol] = {
+                                "price": current_price,
+                                "timestamp": time.time(),
+                            }
                         
                         # Guardar en DB
                         self._save_price_alert(alert)

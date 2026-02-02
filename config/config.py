@@ -57,23 +57,41 @@ class Config:
     TWITTER_PASSWORD = os.getenv('TWITTER_PASSWORD')
     # Ejecutar Twitter en modo headless (sin ventana). Por defecto False (ver navegador)
     TWITTER_HEADLESS = os.getenv('TWITTER_HEADLESS', 'False').lower() in ('1', 'true', 'yes')
-    # Ruta fija para reutilizar perfil de Chrome en Windows
-    CHROME_USER_DATA_DIR = r'I:\Proyectos\BotCryptoV2\chrome_profile'
+    
+    # ========== DETECCIÓN DE ENTORNO (Windows/Linux/Docker) ==========
+    IS_DOCKER = os.getenv('DOCKER_ENV', 'false').lower() in ('1', 'true', 'yes')
+    IS_LINUX = os.name != 'nt'
+    
+    # Ruta para perfil de Chrome (sesión persistente)
+    if IS_DOCKER:
+        CHROME_USER_DATA_DIR = '/app/chrome_profile'
+    elif IS_LINUX:
+        CHROME_USER_DATA_DIR = os.path.join(BASE_DIR, 'chrome_profile')
+    else:
+        CHROME_USER_DATA_DIR = r'I:\Proyectos\BotCryptoV2\chrome_profile'
+    
     try:
         os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)
     except Exception:
         pass
-    _project_chrome_binary = os.path.join(BASE_DIR, 'utils', 'chrome-win64', 'chrome-win', 'chrome.exe') if os.name == 'nt' else None
-    CHROME_BINARY_PATH = _project_chrome_binary if _project_chrome_binary and os.path.isfile(_project_chrome_binary) else os.getenv('CHROME_BINARY_PATH')
-    # Driver portable (Windows/Linux/Docker/Headless)
-    CHROMEDRIVER_PATH = os.getenv(
-        'CHROMEDRIVER_PATH',
-        os.path.join(
-            BASE_DIR,
-            'utils',
-            'chromedriver.exe' if os.name == 'nt' else 'chromedriver'
+    
+    # Binario de Chrome
+    if IS_DOCKER or IS_LINUX:
+        # En Docker/Linux: usar Chrome del sistema
+        CHROME_BINARY_PATH = os.getenv('CHROME_BINARY_PATH', '/usr/bin/google-chrome')
+    else:
+        # En Windows: usar Chrome portable del proyecto
+        _project_chrome_binary = os.path.join(BASE_DIR, 'utils', 'chrome-win64', 'chrome-win', 'chrome.exe')
+        CHROME_BINARY_PATH = _project_chrome_binary if os.path.isfile(_project_chrome_binary) else os.getenv('CHROME_BINARY_PATH')
+    
+    # Driver de Chrome
+    if IS_DOCKER or IS_LINUX:
+        CHROMEDRIVER_PATH = os.getenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
+    else:
+        CHROMEDRIVER_PATH = os.getenv(
+            'CHROMEDRIVER_PATH',
+            os.path.join(BASE_DIR, 'utils', 'chromedriver.exe')
         )
-    )
     
     # ========== GOOGLE GEMINI ==========
     GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
@@ -131,10 +149,161 @@ class Config:
         'HO=F': 'Petróleo para calefacción'
     }
     
+    # ========== TWELVE DATA SYMBOLS (DIFERENTES A YAHOO FINANCE) ==========
+    # Twelve Data usa formato diferente para forex y commodities
+    # NOTA: Algunos pares exóticos (USD/MXN, USD/BRL, USD/TRY) pueden no estar en plan gratuito
+    FOREX_PAIRS_TWELVEDATA = [
+        'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
+        'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 'GBP/CHF', 'AUD/JPY',
+        'AUD/NZD', 'CAD/JPY', 'CHF/JPY', 'EUR/AUD', 'EUR/CAD', 'GBP/AUD', 'NZD/JPY'
+    ]
+    
+    # Mapeo Yahoo Finance -> Twelve Data para forex
+    # Pares exóticos mapeados a None (se omitirán en análisis Twelve Data)
+    FOREX_YAHOO_TO_TWELVE = {
+        'EURUSD=X': 'EUR/USD', 'GBPUSD=X': 'GBP/USD', 'USDJPY=X': 'USD/JPY',
+        'AUDUSD=X': 'AUD/USD', 'USDCAD=X': 'USD/CAD', 'USDCHF=X': 'USD/CHF',
+        'NZDUSD=X': 'NZD/USD', 'EURGBP=X': 'EUR/GBP', 'EURJPY=X': 'EUR/JPY',
+        'GBPJPY=X': 'GBP/JPY', 'GBPCHF=X': 'GBP/CHF', 'AUDJPY=X': 'AUD/JPY', 
+        'AUDNZD=X': 'AUD/NZD', 'CADJPY=X': 'CAD/JPY', 'CHFJPY=X': 'CHF/JPY', 
+        'EURAUD=X': 'EUR/AUD', 'EURCAD=X': 'EUR/CAD', 'GBPAUD=X': 'GBP/AUD', 
+        'NZDJPY=X': 'NZD/JPY',
+        # Pares exóticos no disponibles en Twelve Data free - usar ETFs como proxy
+        'USDMXN=X': None,  # No disponible - omitir
+        'USDBRL=X': None,  # No disponible - omitir
+        'USDTRY=X': None,  # No disponible - omitir
+    }
+    
+    COMMODITIES_TWELVEDATA = {
+        # ETFs de Commodities que funcionan con Twelve Data plan gratuito
+        'GLD': 'Oro ETF (SPDR Gold)',
+        'SLV': 'Plata ETF (iShares Silver)',
+        'USO': 'Crudo WTI ETF',
+        'UNG': 'Gas Natural ETF',
+        'CPER': 'Cobre ETF'
+    }
+    
+    # Mapeo Yahoo Finance -> Twelve Data para commodities
+    # Usar ETFs porque los símbolos forex de commodities (XAU/USD) no están en plan gratuito
+    COMMODITIES_YAHOO_TO_TWELVE = {
+        'GC=F': 'GLD',   # Oro -> ETF de Oro
+        'SI=F': 'SLV',   # Plata -> ETF de Plata
+        'CL=F': 'USO',   # Crudo WTI -> ETF de Crudo
+        'BZ=F': 'USO',   # Brent -> también usar ETF de Crudo
+        'NG=F': 'UNG',   # Gas Natural -> ETF de Gas
+        'HG=F': 'CPER',  # Cobre -> ETF de Cobre
+    }
+    
+    # ========== BONOS MUNDIALES ==========
+    BONDS = {
+        # Bonos de EE.UU.
+        '^TNX': {'name': 'US 10Y Treasury', 'country': 'USA', 'type': 'government'},
+        '^TYX': {'name': 'US 30Y Treasury', 'country': 'USA', 'type': 'government'},
+        '^FVX': {'name': 'US 5Y Treasury', 'country': 'USA', 'type': 'government'},
+        '^IRX': {'name': 'US 13W Treasury', 'country': 'USA', 'type': 'government'},
+        # ETFs de Bonos
+        'TLT': {'name': 'iShares 20+ Year Treasury', 'country': 'USA', 'type': 'etf'},
+        'IEF': {'name': 'iShares 7-10 Year Treasury', 'country': 'USA', 'type': 'etf'},
+        'SHY': {'name': 'iShares 1-3 Year Treasury', 'country': 'USA', 'type': 'etf'},
+        'LQD': {'name': 'iShares Investment Grade Corp Bond', 'country': 'USA', 'type': 'etf'},
+        'HYG': {'name': 'iShares High Yield Corp Bond', 'country': 'USA', 'type': 'etf'},
+        'EMB': {'name': 'iShares JP Morgan Emerging Markets Bond', 'country': 'Emerging', 'type': 'etf'},
+        'AGG': {'name': 'iShares Core US Aggregate Bond', 'country': 'USA', 'type': 'etf'},
+        'BND': {'name': 'Vanguard Total Bond Market', 'country': 'USA', 'type': 'etf'},
+        # Bonos Internacionales
+        'EXX5.DE': {'name': 'iShares German Govt Bond (BUND proxy)', 'country': 'Germany', 'type': 'etf'},
+        'IGOV': {'name': 'iShares Intl Treasury Bond', 'country': 'International', 'type': 'etf'},
+    }
+    
+    # ========== HORARIOS DE MERCADOS MUNDIALES ==========
+    # Formato: {'open': 'HH:MM', 'close': 'HH:MM', 'timezone': 'UTC offset', 'name': 'nombre'}
+    MARKET_HOURS = {
+        'NYSE': {
+            'name': 'New York Stock Exchange',
+            'open': '09:30', 'close': '16:00',
+            'timezone': 'America/New_York',
+            'utc_offset': -5,
+            'weekend_closed': True,
+            'symbols_file': 'STOCK_SYMBOLS_EXTENDED'
+        },
+        'NASDAQ': {
+            'name': 'NASDAQ',
+            'open': '09:30', 'close': '16:00',
+            'timezone': 'America/New_York',
+            'utc_offset': -5,
+            'weekend_closed': True,
+            'symbols_file': 'STOCK_SYMBOLS_EXTENDED'
+        },
+        'LSE': {
+            'name': 'London Stock Exchange',
+            'open': '08:00', 'close': '16:30',
+            'timezone': 'Europe/London',
+            'utc_offset': 0,
+            'weekend_closed': True
+        },
+        'TOKYO': {
+            'name': 'Tokyo Stock Exchange',
+            'open': '09:00', 'close': '15:00',
+            'timezone': 'Asia/Tokyo',
+            'utc_offset': 9,
+            'weekend_closed': True
+        },
+        'FRANKFURT': {
+            'name': 'Frankfurt Stock Exchange (Xetra)',
+            'open': '09:00', 'close': '17:30',
+            'timezone': 'Europe/Berlin',
+            'utc_offset': 1,
+            'weekend_closed': True
+        },
+        'SHANGHAI': {
+            'name': 'Shanghai Stock Exchange',
+            'open': '09:30', 'close': '15:00',
+            'timezone': 'Asia/Shanghai',
+            'utc_offset': 8,
+            'weekend_closed': True
+        },
+        'HONG_KONG': {
+            'name': 'Hong Kong Stock Exchange',
+            'open': '09:30', 'close': '16:00',
+            'timezone': 'Asia/Hong_Kong',
+            'utc_offset': 8,
+            'weekend_closed': True
+        },
+        'FOREX': {
+            'name': 'Forex Market',
+            'open': '00:00', 'close': '23:59',  # 24/5
+            'timezone': 'UTC',
+            'utc_offset': 0,
+            'weekend_closed': True,  # Cierra viernes 17:00 EST hasta domingo 17:00 EST
+            'note': 'Abierto 24h de lunes a viernes'
+        },
+        'CRYPTO': {
+            'name': 'Cryptocurrency Markets',
+            'open': '00:00', 'close': '23:59',
+            'timezone': 'UTC',
+            'utc_offset': 0,
+            'weekend_closed': False,  # 24/7
+            'note': 'Abierto 24/7'
+        },
+        'CME': {
+            'name': 'CME (Commodities)',
+            'open': '17:00', 'close': '16:00',  # Domingo 17:00 a Viernes 16:00
+            'timezone': 'America/Chicago',
+            'utc_offset': -6,
+            'weekend_closed': True,
+            'note': 'Futuros casi 24h L-V'
+        }
+    }
+    
+    # ========== CONFIGURACIÓN DE CAPITAL Y RIESGO ==========
+    DEFAULT_CAPITAL = float(os.getenv('DEFAULT_CAPITAL', '20'))  # $20 por defecto
+    DEFAULT_RISK_PERCENT = float(os.getenv('DEFAULT_RISK_PERCENT', '25'))  # 25% de riesgo
+    
     # ========== BASE DE DATOS ==========
     MYSQL_HOST = os.getenv('MYSQL_HOST', 'localhost')
     MYSQL_USER = os.getenv('MYSQL_USER', 'root')
-    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', os.getenv('DB_PASSWORD', '1234'))
+    # SEGURIDAD: No usar contraseña por defecto - debe configurarse en .env
+    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD') or os.getenv('DB_PASSWORD')
     MYSQL_DATABASE = os.getenv('MYSQL_DATABASE', 'crypto_bot')
     MYSQL_PORT = int(os.getenv('MYSQL_PORT', '3306'))
     DB_PASSWORD = MYSQL_PASSWORD

@@ -22,6 +22,9 @@ import os
 class NewsService:
     """Servicio para scraping y filtrado de noticias de crypto y mercados"""
     
+    # Archivo de historial local (fallback cuando DB no disponible)
+    NEWS_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'news_history.json')
+    
     def __init__(self, db: MySQLManager, telegram: TelegramService, twitter: TwitterService, ai_analyzer: AIAnalyzerService):
         """
         Inicializa el servicio de noticias.
@@ -76,6 +79,7 @@ class NewsService:
     def is_news_published(self, news_hash: str) -> bool:
         """
         Verifica si una noticia ya fue publicada.
+        Usa DB si disponible, sino archivo local.
         
         Args:
             news_hash: Hash de la noticia
@@ -83,6 +87,7 @@ class NewsService:
         Returns:
             True si ya fue publicada
         """
+        # Intentar DB primero
         try:
             conn = self.db.get_connection()
             cursor = conn.cursor()
@@ -100,16 +105,59 @@ class NewsService:
             return count > 0
             
         except Exception as e:
-            logger.warning(f"⚠️ Error verificando noticia en DB: {e}")
-            return False
+            # Fallback a archivo local
+            return self._is_news_published_local(news_hash)
+    
+    def _is_news_published_local(self, news_hash: str) -> bool:
+        """Verifica en archivo local si la noticia fue publicada"""
+        try:
+            import json
+            if os.path.exists(self.NEWS_HISTORY_FILE):
+                with open(self.NEWS_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return news_hash in data.get('published_hashes', [])
+        except Exception:
+            pass
+        return False
+    
+    def _save_news_local(self, news: Dict):
+        """Guarda noticia en archivo local (fallback)"""
+        try:
+            import json
+            data = {'published_hashes': [], 'news': []}
+            if os.path.exists(self.NEWS_HISTORY_FILE):
+                with open(self.NEWS_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            
+            if 'published_hashes' not in data:
+                data['published_hashes'] = []
+            if 'news' not in data:
+                data['news'] = []
+            
+            if news['hash'] not in data['published_hashes']:
+                data['published_hashes'].append(news['hash'])
+                data['news'].append({
+                    'hash': news['hash'],
+                    'title': news['title'][:100],
+                    'timestamp': datetime.now().isoformat()
+                })
+                # Mantener solo últimas 500 noticias
+                data['published_hashes'] = data['published_hashes'][-500:]
+                data['news'] = data['news'][-500:]
+                
+                with open(self.NEWS_HISTORY_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"⚠️ Error guardando noticia localmente: {e}")
     
     def save_news(self, news: Dict):
         """
-        Guarda noticia en la base de datos.
+        Guarda noticia en la base de datos, con fallback a archivo local.
         
         Args:
             news: Diccionario con datos de la noticia
         """
+        saved_to_db = False
         try:
             conn = self.db.get_connection()
             cursor = conn.cursor()
@@ -132,9 +180,13 @@ class NewsService:
             conn.commit()
             cursor.close()
             conn.close()
+            saved_to_db = True
             
         except Exception as e:
-            logger.warning(f"⚠️ Error guardando noticia en DB: {e}")
+            logger.debug(f"⚠️ Error guardando noticia en DB: {e}")
+        
+        # Siempre guardar en archivo local como respaldo
+        self._save_news_local(news['hash'], news)
     
     def fetch_cryptopanic_news(self) -> List[Dict]:
         """
@@ -143,6 +195,10 @@ class NewsService:
         Returns:
             Lista de noticias
         """
+        if not self.cryptopanic_token:
+            logger.debug("⏭️ CryptoPanic deshabilitado (sin token)")
+            return []
+            
         try:
             logger.info("📰 Obteniendo noticias de CryptoPanic...")
             
@@ -173,12 +229,15 @@ class NewsService:
                 
                 logger.info(f"✅ Obtenidas {len(news_list)} noticias de CryptoPanic")
                 return news_list
+            elif response.status_code == 404:
+                logger.debug("⏭️ CryptoPanic API no disponible (404)")
+                return []
             else:
-                logger.warning(f"⚠️ CryptoPanic API error: {response.status_code}")
+                logger.debug(f"⏭️ CryptoPanic API error: {response.status_code}")
                 return []
                 
         except Exception as e:
-            logger.error(f"❌ Error obteniendo noticias de CryptoPanic: {e}")
+            logger.debug(f"⏭️ Error obteniendo noticias de CryptoPanic: {e}")
             return []
     
     def fetch_google_news(self) -> List[Dict]:
@@ -455,7 +514,7 @@ class NewsService:
                      target_group = Config.TELEGRAM_GROUP_CRYPTO
                 
                 # Mensaje profesional
-                telegram_text = self._format_professional_news_message(news, has_image=bool(image_url))
+                telegram_text = self._format_professional_news_message(news, has_image=bool(image_path))
                 
                 # Enviar
                 if target_group:

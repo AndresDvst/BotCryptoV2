@@ -15,12 +15,18 @@ import time
 import random
 from config.config import Config
 from utils.logger import logger
-import time
+from utils.security import sanitize_exception, get_redactor
 import sys
 import os
 from datetime import datetime
 import json
 import hashlib
+
+# Registrar secretos para sanitización
+try:
+    get_redactor().register_secrets_from_config(Config)
+except Exception:
+    pass
 
 class TwitterService:
     """Servicio para publicar en Twitter usando Selenium"""
@@ -117,7 +123,9 @@ class TwitterService:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error al hacer login en Twitter: {e}")
+            # Sanitizar el mensaje de error para no exponer credenciales
+            safe_error = sanitize_exception(e)
+            logger.error(f"❌ Error al hacer login en Twitter: {safe_error}")
             try:
                 # Guardar artefactos para depuración
                 os.makedirs('utils', exist_ok=True)
@@ -132,10 +140,22 @@ class TwitterService:
                         logger.error(f"📎 Captura guardada: {screenshot_path}")
                         logger.error(f"📄 HTML guardado: {html_path}")
                     except Exception as save_err:
-                        logger.error(f"❌ Error guardando captura/HTML: {save_err}")
+                        logger.error(f"❌ Error guardando captura/HTML: {sanitize_exception(save_err)}")
             except Exception:
                 pass
+            
+            # Cerrar driver en caso de error para evitar fugas de recursos
+            self._safe_close_driver()
             return False
+    
+    def _safe_close_driver(self):
+        """Cierra el driver de forma segura"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
     
     def _history_path(self) -> str:
         return os.path.join(os.getcwd(), 'tweet_history.json')
