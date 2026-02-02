@@ -27,20 +27,20 @@ ssh ubuntu@TU_IP_VPS
 ssh -i "tu_clave.pem" ubuntu@TU_IP_VPS
 ```
 
-## Paso 2: Instalar Escritorio XFCE + XRDP
+## Paso 2: Instalar Escritorio LXDE + XRDP
 
 ```bash
 # Actualizar sistema
 sudo apt update && sudo apt upgrade -y
 
-# Instalar escritorio XFCE (ligero, ~500MB RAM)
-sudo apt install -y xfce4 xfce4-goodies
+# Instalar escritorio LXDE (muy ligero, ~200MB RAM)
+sudo apt install -y lxde-core lxterminal
 
 # Instalar XRDP (servidor de escritorio remoto)
 sudo apt install -y xrdp
 
-# Configurar XRDP para usar XFCE
-echo "xfce4-session" | tee ~/.xsession
+# Configurar XRDP para usar LXDE
+echo "startlxde" > ~/.xsession
 
 # Reiniciar XRDP
 sudo systemctl restart xrdp
@@ -51,6 +51,14 @@ sudo ufw allow 3389/tcp
 sudo ufw allow 22/tcp
 sudo ufw enable
 ```
+
+> **Alternativas de escritorio:**
+> | Escritorio | RAM | Comando de instalación |
+> |------------|-----|------------------------|
+> | LXDE (recomendado) | ~200MB | `sudo apt install -y lxde-core` |
+> | LXQt | ~250MB | `sudo apt install -y lxqt` |
+> | XFCE | ~400MB | `sudo apt install -y xfce4` |
+> | Openbox (solo ventanas) | ~100MB | `sudo apt install -y openbox` |
 
 ## Paso 3: Crear contraseña para el usuario
 
@@ -357,7 +365,9 @@ sudo systemctl enable fail2ban
 ## Método A (Sin Docker) - Comandos esenciales:
 ```bash
 # Primera vez
-sudo apt update && sudo apt install -y xfce4 xrdp
+sudo apt update && sudo apt install -y lxde-core lxterminal xrdp
+echo "startlxde" > ~/.xsession
+sudo systemctl restart xrdp
 sudo passwd ubuntu
 # Conectar con Escritorio Remoto de Windows
 
