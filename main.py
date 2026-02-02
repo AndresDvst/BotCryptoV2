@@ -267,25 +267,29 @@ def main():
         
         manager = BotManager()
         
-        # Modo automático para Docker (sin menú interactivo)
-        # BOT_MODE: 1=Análisis Completo, 12=Modo Espera (default), 2=Scheduler
-        if Config.IS_DOCKER or '--auto' in sys.argv:
-            bot_mode = os.getenv('BOT_MODE', '12')
-            logger.info(f"🐳 Modo Docker/Automático detectado - BOT_MODE={bot_mode}")
+        # Detectar si hay terminal interactiva (TTY)
+        has_tty = sys.stdin.isatty() and sys.stdout.isatty()
+        bot_mode = os.getenv('BOT_MODE', 'menu')  # 'menu' = mostrar menú si hay TTY
+        
+        # Modo automático para Docker SIN TTY o con --auto
+        if '--auto' in sys.argv or (Config.IS_DOCKER and not has_tty):
+            logger.info(f"🐳 Modo Automático - BOT_MODE={bot_mode}")
             
             if bot_mode == '1':
                 logger.info("🌟 Ejecutando: Análisis Completo")
                 run_complete_cycle(manager)
-                # Después del análisis, entrar en modo espera
                 logger.info("⏰ Análisis completado, entrando en Modo Espera Inteligente...")
                 run_smart_wait_mode(manager)
             elif bot_mode == '2':
                 logger.info("⏰ Ejecutando: Scheduler automático (cada 2h + 6 AM)")
                 setup_scheduler(manager)
-            else:  # default: 12
+            else:  # default: modo espera
                 logger.info("⏰ Ejecutando: Modo Espera Inteligente")
                 run_smart_wait_mode(manager)
             return
+        
+        # Si hay TTY (terminal interactiva), mostrar menú
+        logger.info("🖥️ Terminal interactiva detectada - Mostrando menú")
         
         # Menú principal mejorado
         while True:

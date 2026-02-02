@@ -8,6 +8,10 @@ services:
     container_name: cryptobot
     restart: unless-stopped
     
+    # Modo interactivo (para ver el menú del bot)
+    stdin_open: true
+    tty: true
+    
     # Variables de entorno (copia tu .env o define aquí)
     env_file:
       - .env
