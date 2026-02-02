@@ -3,7 +3,6 @@ import sys
 import subprocess
 import re
 import tempfile
-import shutil
 from typing import Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -95,32 +94,29 @@ class BrowserManager:
             options.add_experimental_option('useAutomationExtension', False)
             options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             
-            # --- Perfil de Usuario ---
-            # En Docker, usar directorio temporal con permisos correctos
-            if is_docker or is_linux:
-                # Usar /tmp que siempre tiene permisos de escritura
-                profile_root = '/tmp/chrome_profile'
-                try:
-                    # Crear directorio con permisos completos
-                    os.makedirs(profile_root, mode=0o777, exist_ok=True)
-                    # También crear subdirectorio Default que Chrome necesita
-                    os.makedirs(os.path.join(profile_root, 'Default'), mode=0o777, exist_ok=True)
-                    logger.info(f"📁 Usando perfil temporal en: {profile_root}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Error creando perfil: {e}, usando mkdtemp")
-                    profile_root = tempfile.mkdtemp(prefix='chrome_profile_')
-            else:
-                # En Windows, usar el perfil configurado
-                profile_root = getattr(Config, 'CHROME_USER_DATA_DIR', None)
-                if not profile_root:
-                    profile_root = os.path.join(os.getcwd(), 'chrome_profile')
-                profile_root = os.path.abspath(profile_root)
+            # --- Perfil de Usuario (PERSISTENTE) ---
+            # Obtener ruta del perfil desde Config o usar default según OS
+            profile_root = getattr(Config, 'CHROME_USER_DATA_DIR', None)
             
+            if not profile_root:
+                if is_linux:
+                    # En Linux, usar directorio en home del usuario
+                    home = os.path.expanduser('~')
+                    profile_root = os.path.join(home, '.config', 'cryptobot_chrome_profile')
+                else:
+                    # En Windows, usar directorio en el proyecto
+                    profile_root = os.path.join(os.getcwd(), 'chrome_profile')
+            
+            # Asegurar ruta absoluta
+            profile_root = os.path.abspath(profile_root)
+            
+            # Crear directorio si no existe
             if not os.path.exists(profile_root):
                 try:
                     os.makedirs(profile_root, exist_ok=True)
-                except Exception:
-                    pass
+                    logger.info(f"📁 Directorio de perfil creado: {profile_root}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error creando directorio de perfil: {e}")
             
             options.add_argument(f'--user-data-dir={profile_root}')
             logger.info(f"🔑 Usando perfil de Chrome: {profile_root}")
