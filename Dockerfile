@@ -101,15 +101,19 @@ RUN chmod +x /entrypoint.sh
 ENV DISPLAY=:99
 ENV CHROME_BINARY_PATH=/usr/bin/google-chrome
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-ENV CHROME_USER_DATA_DIR=/app/chrome_profile
+ENV CHROME_USER_DATA_DIR=/tmp/chrome_profile
 ENV DOCKER_ENV=true
+ENV IS_DOCKER=true
+
+# Crear directorio de perfil de Chrome con permisos correctos
+RUN mkdir -p /tmp/chrome_profile/Default && chmod -R 777 /tmp/chrome_profile
 
 # Puertos
 # 6080 = noVNC (acceso web al navegador)
 # 5900 = VNC directo (opcional)
 EXPOSE 6080 5900
 
-# Volumen para persistir sesión de Chrome
-VOLUME ["/app/chrome_profile", "/app/logs"]
+# Volumen para persistir logs (el perfil de Chrome es temporal)
+VOLUME ["/app/logs"]
 
 ENTRYPOINT ["/entrypoint.sh"]

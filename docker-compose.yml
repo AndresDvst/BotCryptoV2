@@ -29,10 +29,8 @@ services:
       - "6080:6080"   # noVNC - Acceso web al navegador
       - "5900:5900"   # VNC directo (opcional, para clientes VNC)
     
-    # Volúmenes persistentes (IMPORTANTE para la sesión)
+    # Volúmenes persistentes
     volumes:
-      # Perfil de Chrome - AQUÍ SE GUARDA LA SESIÓN DE TWITTER
-      - ./chrome_profile:/app/chrome_profile
       # Logs
       - ./logs:/app/logs
       # Historiales

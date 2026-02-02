@@ -96,36 +96,25 @@ class BrowserManager:
             options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             
             # --- Perfil de Usuario ---
-            profile_root = getattr(Config, 'CHROME_USER_DATA_DIR', None)
-            if not profile_root:
-                # Fallback seguro si no está definido
-                profile_root = os.path.join(os.getcwd(), 'chrome_profile')
-            
-            # Asegurar que la ruta es absoluta
-            profile_root = os.path.abspath(profile_root)
-            
-            # En Docker/Linux, verificar si el perfil es de Windows (incompatible)
-            # y crear uno nuevo si es necesario
+            # En Docker, usar directorio temporal con permisos correctos
             if is_docker or is_linux:
-                local_state_file = os.path.join(profile_root, 'Local State')
-                if os.path.exists(local_state_file):
-                    try:
-                        with open(local_state_file, 'r') as f:
-                            content = f.read()
-                            # Si contiene rutas de Windows, es un perfil incompatible
-                            if 'C:\\\\' in content or 'C:/' in content or '\\\\Users\\\\' in content:
-                                logger.warning("⚠️ Perfil de Chrome de Windows detectado en Linux. Creando perfil limpio...")
-                                backup_path = profile_root + '_windows_backup'
-                                if os.path.exists(backup_path):
-                                    shutil.rmtree(backup_path, ignore_errors=True)
-                                shutil.move(profile_root, backup_path)
-                                os.makedirs(profile_root, exist_ok=True)
-                                logger.info("✅ Perfil de Chrome limpio creado")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error verificando perfil de Chrome: {e}")
-                        # Si hay error, intentar usar perfil temporal
-                        profile_root = tempfile.mkdtemp(prefix='chrome_profile_')
-                        logger.info(f"📁 Usando perfil temporal: {profile_root}")
+                # Usar /tmp que siempre tiene permisos de escritura
+                profile_root = '/tmp/chrome_profile'
+                try:
+                    # Crear directorio con permisos completos
+                    os.makedirs(profile_root, mode=0o777, exist_ok=True)
+                    # También crear subdirectorio Default que Chrome necesita
+                    os.makedirs(os.path.join(profile_root, 'Default'), mode=0o777, exist_ok=True)
+                    logger.info(f"📁 Usando perfil temporal en: {profile_root}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error creando perfil: {e}, usando mkdtemp")
+                    profile_root = tempfile.mkdtemp(prefix='chrome_profile_')
+            else:
+                # En Windows, usar el perfil configurado
+                profile_root = getattr(Config, 'CHROME_USER_DATA_DIR', None)
+                if not profile_root:
+                    profile_root = os.path.join(os.getcwd(), 'chrome_profile')
+                profile_root = os.path.abspath(profile_root)
             
             if not os.path.exists(profile_root):
                 try:
