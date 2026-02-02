@@ -53,14 +53,27 @@ sudo usermod -aG docker $USER
 ### Opción A: Con Git (recomendado)
 ```bash
 cd /opt
-git clone https://github.com/TU_USUARIO/BotCryptoV2.git
+sudo git clone https://github.com/AndresDvst/BotCryptoV2.git
 cd BotCryptoV2
+sudo chown -R ubuntu:ubuntu .
 ```
 
 ### Opción B: Con SCP desde tu PC Windows
 ```powershell
 # Ejecutar en PowerShell de tu PC
-scp -r I:\Proyectos\BotCryptoV2 root@TU_IP_VPS:/opt/
+scp -i "C:\Users\WinterOS\Downloads\key.pem" -r I:\Proyectos\BotCryptoV2 ubuntu@IP:~
+
+### En la vps
+sudo mv ~/BotCryptoV2 /opt/
+sudo chown -R ubuntu:ubuntu /opt/BotCryptoV2
+cd /opt/BotCryptoV2
+
+### Actualizar GIT
+cd /opt/BotCryptoV2
+git init
+git remote add origin https://github.com/AndresDvst/BotCryptoV2.git
+git fetch origin
+git reset --hard origin/main
 ```
 
 ### Opción C: Con FileZilla
@@ -123,13 +136,13 @@ sudo ufw status
 cd /opt/BotCryptoV2
 
 # Construir la imagen (primera vez, tarda ~5-10 min)
-docker compose build
+sudo docker compose build
 
 # Iniciar el contenedor
-docker compose up -d
+sudo docker compose up -d
 
 # Ver logs en tiempo real
-docker compose logs -f
+sudo docker compose logs -f
 ```
 
 ---
