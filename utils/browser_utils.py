@@ -146,7 +146,7 @@ class BrowserManager:
             # --- Servicio ---
             # Suprimir logs basura del driver
             log_path = os.devnull
-            service = Service(driver_path, log_path=log_path)
+            service = Service(driver_path, log_path="chromedriver.log", verbose=True)
             
             if sys.platform == 'win32':
                 # Ocultar ventana de consola del driver
