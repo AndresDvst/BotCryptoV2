@@ -267,6 +267,12 @@ def main():
         
         manager = BotManager()
         
+        # Modo automático para Docker (sin menú interactivo)
+        if Config.IS_DOCKER or '--auto' in sys.argv:
+            logger.info("🐳 Modo Docker/Automático detectado - Iniciando Modo Espera Inteligente")
+            run_smart_wait_mode(manager)
+            return
+        
         # Menú principal mejorado
         while True:
             print("\n" + "=" * 60)
