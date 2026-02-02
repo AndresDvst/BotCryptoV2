@@ -3,6 +3,7 @@ import sys
 import subprocess
 import re
 import tempfile
+import shutil
 from typing import Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -41,12 +42,34 @@ class BrowserManager:
         try:
             options = Options()
             
+            # --- Detectar si estamos en Docker/Linux ---
+            is_docker = os.path.exists('/.dockerenv') or os.environ.get('IS_DOCKER', '').lower() == 'true'
+            is_linux = sys.platform.startswith('linux')
+            
             # --- Configuración Base ---
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--remote-debugging-port=9222')
             options.add_argument('--disable-gpu')
             options.add_argument('--disable-software-rasterizer')
+            
+            # --- Opciones adicionales para Docker/Linux ---
+            if is_docker or is_linux:
+                options.add_argument('--disable-extensions')
+                options.add_argument('--disable-background-networking')
+                options.add_argument('--disable-default-apps')
+                options.add_argument('--disable-sync')
+                options.add_argument('--disable-translate')
+                options.add_argument('--no-first-run')
+                options.add_argument('--no-default-browser-check')
+                options.add_argument('--disable-crash-reporter')
+                options.add_argument('--disable-infobars')
+                options.add_argument('--single-process')  # Importante para Docker
+                options.add_argument('--window-size=1920,1080')
+                # Remote debugging solo si no estamos en headless
+                if not headless:
+                    options.add_argument('--remote-debugging-port=9222')
+            else:
+                options.add_argument('--remote-debugging-port=9222')
             
             # Headless según argumento o Config, pero el argumento tiene precedencia si es True
             config_headless = getattr(Config, 'TWITTER_HEADLESS', False)
@@ -70,9 +93,28 @@ class BrowserManager:
             # Asegurar que la ruta es absoluta
             profile_root = os.path.abspath(profile_root)
             
-            # Usar un subdirectorio si no apunta ya a un User Data específico
-            # Pero el usuario pidió explícitamente user-data-dir=I:\Proyectos\BotCryptoV2\chrome_profile
-            # Así que lo respetamos tal cual.
+            # En Docker/Linux, verificar si el perfil es de Windows (incompatible)
+            # y crear uno nuevo si es necesario
+            if is_docker or is_linux:
+                local_state_file = os.path.join(profile_root, 'Local State')
+                if os.path.exists(local_state_file):
+                    try:
+                        with open(local_state_file, 'r') as f:
+                            content = f.read()
+                            # Si contiene rutas de Windows, es un perfil incompatible
+                            if 'C:\\\\' in content or 'C:/' in content or '\\\\Users\\\\' in content:
+                                logger.warning("⚠️ Perfil de Chrome de Windows detectado en Linux. Creando perfil limpio...")
+                                backup_path = profile_root + '_windows_backup'
+                                if os.path.exists(backup_path):
+                                    shutil.rmtree(backup_path, ignore_errors=True)
+                                shutil.move(profile_root, backup_path)
+                                os.makedirs(profile_root, exist_ok=True)
+                                logger.info("✅ Perfil de Chrome limpio creado")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error verificando perfil de Chrome: {e}")
+                        # Si hay error, intentar usar perfil temporal
+                        profile_root = tempfile.mkdtemp(prefix='chrome_profile_')
+                        logger.info(f"📁 Usando perfil temporal: {profile_root}")
             
             if not os.path.exists(profile_root):
                 try:
@@ -81,8 +123,6 @@ class BrowserManager:
                     pass
             
             options.add_argument(f'--user-data-dir={profile_root}')
-            # Forzar perfil Default para evitar conflictos
-            # options.add_argument('--profile-directory=Default') 
             logger.info(f"🔑 Usando perfil de Chrome: {profile_root}")
 
             # --- Binario de Chrome ---
