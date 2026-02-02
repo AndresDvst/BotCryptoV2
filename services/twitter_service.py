@@ -283,6 +283,8 @@ class TwitterService:
             self._human_delay(0.5, 1)
             
             # Enviar el texto directamente al área de texto (compatible con headless)
+            # Filtrar caracteres fuera del BMP que ChromeDriver no soporta
+            text = ''.join(c for c in text if ord(c) <= 0xFFFF)
             tweet_box.send_keys(text)
             self._human_delay(1, 2)
             
