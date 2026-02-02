@@ -1,60 +1,18 @@
 # 🤖 Crypto Trading Bot V3 - Análisis Multi-Mercado con IA
 
 <div align="center">
-<a href="https://wa.link/a3j64p" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" /></a>
-<a href="https://twitter.com/AndresDvst25" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/X/Twitter-000000?style=for-the-badge&logo=x&logoColor=white" /></a>
-<a href="https://www.facebook.com/andres.campos.732122" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" /></a>
-<a href="https://www.instagram.com/andres.devback/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Instagram-E4405F?style=for-the-badge&logo=instagram&logoColor=white" /></a>
-<a href="https://www.linkedin.com/in/andresdevback22/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" /></a>
-<a href="https://github.com/AndresDvst" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" /></a>
-<a href="https://discord.com/users/1133809866130067476" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" /></a>
-</div>
 
-<br>
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Gemini](https://img.shields.io/badge/AI-Gemini_2.5-orange.svg)
+![Version](https://img.shields.io/badge/Version-3.0-green.svg)
 
-<div align="center">
+**Bot inteligente de trading que analiza criptomonedas, mercados tradicionales, genera señales técnicas con IA, y publica automáticamente en Telegram y Twitter**
 
-**Bot inteligente de trading que analiza criptomonedas, mercados tradicionales (stocks/forex/commodities), genera señales técnicas con IA, monitorea precios en tiempo real, y publica automáticamente en Telegram y Twitter**
-
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-orange.svg)](https://ai.google.dev/)
-[![Version](https://img.shields.io/badge/Version-3.0-green.svg)](https://github.com/AndresDvst/BotCryptoV2)
+[🚀 Instalación](#-instalación-rápida) • [⚙️ Configuración](#️-configuración) • [🐳 Docker](#-despliegue-con-docker) • [💻 Uso](#-uso)
 
 </div>
-
----
-
-## 🆕 Novedades en V3
-
-### 🌟 Nuevas Funcionalidades Implementadas
-
-- **📈 Análisis de Mercados Tradicionales**
-  - Acciones del S&P 500 (27 principales)
-  - Pares de Forex (6 principales)
-  - Commodities (Oro, Plata, Crudo, Brent, etc.)
-  - Publicación automática en Twitter y Telegram
-
-- **🎯 Análisis Técnico Avanzado**
-  - Indicadores: RSI, MACD, Bollinger Bands, ATR, EMAs, SMAs, Stochastic
-  - Señales de trading: LONG/SHORT/NEUTRAL con confianza 0-100%
-  - Position Sizing automático basado en riesgo
-  - Stop Loss y Take Profit dinámicos (ATR-based)
-  - Generación de gráficos visuales con matplotlib
-
-- **🔄 Modo Continuo con Monitoreo en Tiempo Real**
-  - Arquitectura multihilo (threading)
-  - Detección de pumps/dumps >5% cada 5 minutos
-  - Detección de nuevos pares en Binance
-  - Alertas automáticas en Twitter y Telegram
-  - Alterna entre análisis completos y monitoreo de 2 horas
-
-- **📰 Scraper de Noticias con IA**
-  - Integración con CryptoPanic API
-  - Scraping de Google News RSS (5 feeds)
-  - Filtro de relevancia con Gemini (scoring 1-10)
-  - Sistema de deduplicación con hash MD5
-  - Publicación automática de noticias relevantes (score ≥7)
 
 ---
 
@@ -64,310 +22,258 @@
 - [🚀 Instalación Rápida](#-instalación-rápida)
 - [⚙️ Configuración](#️-configuración)
 - [💻 Uso](#-uso)
+- [🐳 Despliegue con Docker](#-despliegue-con-docker)
 - [🏗️ Arquitectura](#️-arquitectura)
-- [📊 Ejemplo de Reporte](#-ejemplo-de-reporte)
 - [🛠️ Solución de Problemas](#️-solución-de-problemas)
-- [🔐 Seguridad](#-seguridad)
-- [📝 Buenas Prácticas](#-buenas-prácticas)
 
 ---
 
 ## ✨ Características
 
-### 🎯 Funcionalidades Principales
+### 📈 Análisis de Mercados
 
-- **📈 Análisis de Mercado en Tiempo Real**
-  - Consulta automática a Binance para todas las criptomonedas
-  - Filtrado inteligente de monedas con cambios ≥10% en 24h
-  - Análisis de cambios en las últimas 2 horas
-- **🧠 Análisis con IA (Google Gemini 2.5 Flash)**
-  - Generación automática de análisis y recomendaciones
-  - Evaluación de riesgos y oportunidades
-  - Insights basados en datos del mercado
+| Mercado | Fuente | Características |
+|---------|--------|-----------------|
+| **Criptomonedas** | Binance | Top movers, cambios 2h/24h, volumen |
+| **Acciones** | Twelve Data | S&P 500, tech stocks, ETFs |
+| **Forex** | Twelve Data | EUR/USD, GBP/USD, etc. |
+| **Commodities** | Twelve Data | Oro, Plata, Petróleo |
 
-- **📊 Análisis de Sentimiento del Mercado**
-  - Fear & Greed Index en tiempo real
-  - Datos globales del mercado (CoinGecko)
-  - Monedas en tendencia
+### 🧠 Análisis con IA (Google Gemini)
 
-- **📱 Publicación Automática**
-  - Envío de reportes formateados a Telegram
-  - Publicación automática en Twitter/X con imágenes
-  - Reportes cada 2 horas + reporte matutino a las 6 AM
+- Generación automática de análisis y recomendaciones
+- Evaluación de riesgos y oportunidades
+- Filtrado de noticias por relevancia (scoring 1-10)
+- Resúmenes inteligentes para Twitter
 
-- **🔄 Ejecución Programada**
-  - Scheduler integrado para ejecuciones automáticas
-  - Reinicio manual en caliente sin detener el bot
-  - Logs con colores para fácil seguimiento
+### 🎯 Análisis Técnico Avanzado
 
-### 🛡️ Sistema Profesional
+- **Indicadores**: RSI, MACD, Bollinger Bands, ATR, EMAs, SMAs, Stochastic
+- **Señales**: LONG/SHORT/NEUTRAL con confianza 0-100%
+- **Position Sizing** automático basado en riesgo
+- **Stop Loss/Take Profit** dinámicos (ATR-based)
+- Generación de gráficos visuales
 
-- **📝 Logging Avanzado**
-  - Logs con colores en consola
-  - Archivos de log diarios automáticos
-  - Niveles: INFO, WARNING, ERROR
+### 📱 Publicación Automática
 
-- **⚙️ Configuración Centralizada**
-  - Variables de entorno con `.env`
-  - Validación automática al inicio
-  - Configuración flexible y segura
+| Plataforma | Bot | Canal |
+|------------|-----|-------|
+| Telegram | @CryptoBot | Reportes cada 2h + 6AM |
+| Telegram | @MarketsBot | Mercados tradicionales |
+| Telegram | @SignalsBot | Señales de trading |
+| Twitter/X | Selenium | Publicación con imágenes |
 
-- **🔒 Seguridad**
-  - Claves API protegidas en `.env`
-  - `.gitignore` completo
-  - Permisos de solo lectura en APIs
+### 🔄 Modos de Operación
 
-### 🆕 Nuevas Funcionalidades (Enterprise V2)
-
-- **🗄️ Base de Datos MySQL**
-  - Migración a base de datos robusta (MySQL)
-  - Configuración automática (crea DB y tablas)
-  - Persistencia de datos de alto rendimiento
-
-- **📊 Dashboard Web Integrado**
-  - Acceso directo desde el menú principal
-  - Visualización en tiempo real
-  - Gráficos históricos interactivos
-
-- **🛠️ Herramientas de Mantenimiento**
-  - Limpieza de repositorio automatizada
-  - Gestión y purga de base de datos desde el bot
-  - Logs mejorados con rotación diaria
-
-- **✅ Tests Unitarios**
-  - Suite completa de tests con pytest
-  - Cobertura de código para servicios críticos
+| Modo | Descripción |
+|------|-------------|
+| **Análisis Completo** | Crypto + Mercados + Señales + Noticias |
+| **Modo Espera Inteligente** | Monitoreo continuo + alertas automáticas |
+| **Scheduler** | Ejecuciones programadas cada 2h |
+| **Monitoreo Tiempo Real** | Detección de pumps/dumps cada 5 min |
 
 ---
 
 ## 🚀 Instalación Rápida
 
-### 1️⃣ Requisitos Previos
+### Requisitos
 
-- Python 3.11 o superior
-- **Servidor MySQL** (Local o Remoto)
-- Cuenta en Binance (API)
-- Bot de Telegram
-- Cuenta de Twitter/X
-- API Key de Google Gemini
+- Python 3.11+
+- Google Chrome (para Twitter)
+- MySQL (opcional, para persistencia)
 
-### 2️⃣ Clonar Repositorio
+### Windows
 
-```bash
+```powershell
+# Clonar repositorio
 git clone https://github.com/AndresDvst/BotCryptoV2.git
 cd BotCryptoV2
-```
 
-### 3️⃣ Crear Entorno Virtual
-
-```bash
+# Crear entorno virtual
 python -m venv venv
-venv\\Scripts\\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-```
+.\venv\Scripts\Activate
 
-### 4️⃣ Instalar Dependencias
-
-```bash
+# Instalar dependencias
 pip install -r requirements.txt
+
+# Configurar variables de entorno
+copy .env.example .env
+# Editar .env con tus API keys
+
+# Ejecutar
+python main.py
 ```
 
-### 5️⃣ Verificar Instalación
+### Linux/Ubuntu
 
 ```bash
-python check_setup.py
+# Clonar repositorio
+git clone https://github.com/AndresDvst/BotCryptoV2.git
+cd BotCryptoV2
+
+# Crear entorno virtual
+python3.11 -m venv venv
+source venv/bin/activate
+
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Configurar variables de entorno
+cp .env.example .env
+nano .env  # Editar con tus API keys
+
+# Ejecutar
+python main.py
 ```
 
 ---
 
 ## ⚙️ Configuración
 
-### Paso 1: Crear Archivo `.env`
-
-```bash
-copy .env.example .env  # Windows
-# cp .env.example .env  # Linux/Mac
-```
-
-### Paso 2: Obtener Claves API
-
-#### 🔹 Binance API
-
-1. Ve a [Binance API Management](https://www.binance.com/en/my/settings/api-management)
-2. Crea una nueva API Key
-3. **IMPORTANTE**: Solo marca permisos de **lectura** (Read)
-4. Guarda tu **API Key** y **Secret Key**
-
-#### 🔹 Telegram Bot
-
-1. Busca `@BotFather` en Telegram
-2. Envía `/newbot` y sigue las instrucciones
-3. Copia el **TOKEN** que te da
-4. Busca `@userinfobot` y envía `/start`
-5. Copia tu **CHAT_ID**
-
-#### 🔹 Twitter API
-
-1. Ve a [Twitter Developer Portal](https://developer.twitter.com/en/portal/dashboard)
-2. Crea una app con permisos de **Read and Write**
-3. Genera tus claves:
-   - API Key
-   - API Secret
-   - Access Token
-   - Access Secret
-
-#### 🔹 Google Gemini API
-
-1. Ve a [Google AI Studio](https://aistudio.google.com/)
-2. Haz clic en "Get API Key"
-3. Crea o selecciona un proyecto
-4. Copia tu **API Key**
-
-**💡 Ventajas de Gemini**:
-
-- ✅ Completamente GRATIS (60 req/min)
-- ✅ No requiere tarjeta de crédito
-- ✅ Perfecto para comenzar
-
-### Paso 3: Configurar `.env`
-
-Edita el archivo `.env` con tus claves:
+### Variables de Entorno (.env)
 
 ```env
-# BINANCE API
-BINANCE_API_KEY=tu_clave_aqui
-BINANCE_API_SECRET=tu_secret_aqui
+# ========== BINANCE ==========
+BINANCE_API_KEY=tu_api_key
+BINANCE_API_SECRET=tu_api_secret
 
-# TELEGRAM BOT
-TELEGRAM_BOT_TOKEN=tu_token_aqui
-TELEGRAM_CHAT_ID=tu_chat_id_aqui
+# ========== TELEGRAM (3 bots diferentes) ==========
+TELEGRAM_BOT_CRYPTO=token_bot_crypto
+TELEGRAM_BOT_MARKETS=token_bot_markets
+TELEGRAM_BOT_SIGNALS=token_bot_signals
 
-# TWITTER API
-TWITTER_API_KEY=tu_api_key_aqui
-TWITTER_API_SECRET=tu_api_secret_aqui
-TWITTER_ACCESS_TOKEN=tu_access_token_aqui
-TWITTER_ACCESS_SECRET=tu_access_secret_aqui
+TELEGRAM_CHAT_ID_CRYPTO=chat_id_crypto
+TELEGRAM_CHAT_ID_MARKETS=chat_id_markets
+TELEGRAM_CHAT_ID_SIGNALS=chat_id_signals
 
-# GOOGLE GEMINI API
-GOOGLE_GEMINI_API_KEY=tu_clave_aqui
+# Grupos (opcional)
+TELEGRAM_GROUP_CRYPTO=@tu_canal_crypto
+TELEGRAM_GROUP_MARKETS=@tu_canal_markets
+TELEGRAM_GROUP_SIGNALS=@tu_canal_signals
 
-# CONFIGURACIÓN
+# ========== TWITTER ==========
+TWITTER_USERNAME=tu_usuario
+TWITTER_PASSWORD=tu_password
+TWITTER_HEADLESS=False
+
+# ========== APIs ==========
+GOOGLE_GEMINI_API_KEY=tu_gemini_key
+TWELVEDATA_API_KEY=tu_twelve_data_key
+
+# ========== CONFIGURACIÓN ==========
 MIN_CHANGE_PERCENT=10
-MORNING_IMAGE_PATH=./images/morning_report.png
-REPORT_IMAGE_PATH=./images/crypto_report.png
+BOT_MODE=menu  # menu, 1, 2, 12
+
+# ========== MYSQL (opcional) ==========
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=tu_password
+MYSQL_DATABASE=crypto_bot
 ```
 
-### Paso 4: Preparar Imágenes
+### Obtener API Keys
 
-1. Crea dos imágenes PNG:
-   - `morning_report.png` (reporte 6 AM)
-   - `crypto_report.png` (reportes cada 2h)
-2. Colócalas en la carpeta `images/`
-
-**Recomendaciones**:
-
-- Tamaño: 1200x675 píxeles
-- Tema: Relacionado con criptomonedas
-- Peso: Menor a 5 MB
+| Servicio | URL | Notas |
+|----------|-----|-------|
+| Binance | [API Management](https://www.binance.com/en/my/settings/api-management) | Solo lectura |
+| Telegram | [@BotFather](https://t.me/BotFather) | Crear 3 bots |
+| Twitter | [Developer Portal](https://developer.twitter.com/) | Read & Write |
+| Gemini | [AI Studio](https://aistudio.google.com/) | Gratis, 60 req/min |
+| Twelve Data | [Dashboard](https://twelvedata.com/) | 800 req/día gratis |
 
 ---
 
 ## 💻 Uso
 
-### Ejecutar el Bot
-
-```bash
-python main.py
-```
-
-### Menú de Opciones
+### Menú Principal
 
 ```
 ============================================================
-💡 OPCIONES DE EJECUCIÓN
+💡 MENÚ PRINCIPAL - CRYPTO BOT V3
 ============================================================
-1. Ejecutar análisis ahora (una vez)
-2. Programar ejecuciones automáticas (cada 2h + 6 AM)
-3. Ambas (ejecutar ahora + programar)
+1.  🌟 Análisis Completo (Todo en un ciclo)
+2.  ⏰ Programar ejecuciones automáticas (cada 2h + 6 AM)
+3.  🚀 Análisis Básico (solo crypto)
+4.  📊 Abrir Dashboard Web
+5.  🧹 Limpiar repositorio
+6.  🗑️  Limpiar base de datos
+7.  📈 Análisis de Mercados Tradicionales
+8.  🎯 Análisis Técnico con Señales
+9.  🔄 Modo Continuo (Monitoreo 5 min)
+10. 📰 Scraping de Noticias TradingView
+11. 🔁 Reiniciar Bot
+12. ⏰ Modo Espera Inteligente
+13. 🧪 Backtesting
+14. 📝 Prueba de Mensajes Telegram
+0.  👋 Salir
 ============================================================
 ```
 
-### 🎯 Descripción de Opciones
+### Opciones Recomendadas
 
-#### Opción 1: Análisis Inmediato
+| Opción | Cuándo usar |
+|--------|-------------|
+| **1** | Primera ejecución, ver todo funcionando |
+| **12** | Operación 24/7 (monitoreo + reportes automáticos) |
+| **2** | Solo reportes programados cada 2h |
+| **8** | Obtener señales de trading con análisis técnico |
 
-Ejecuta un análisis completo una sola vez y termina.
+---
 
-**Ideal para**:
+## 🐳 Despliegue con Docker
 
-- Probar el bot por primera vez
-- Verificar configuración
-- Análisis puntuales
+### Requisitos VPS
 
-#### Opción 2: Modo Automático ⭐ Recomendado
+- Ubuntu 22.04/24.04
+- 2GB RAM mínimo (3GB+ recomendado)
+- 20GB disco
+- Puertos 6080 y 5900 abiertos
 
-Programa ejecuciones automáticas:
-
-- Cada 2 horas
-- Reporte matutino a las 6:00 AM
-- Ejecuta indefinidamente
-
-**Ideal para**:
-
-- Uso continuo
-- Monitoreo 24/7
-- Producción
-
-#### Opción 3: Híbrido
-
-Ejecuta análisis inmediato + programa ejecuciones automáticas.
-
-**Ideal para**:
-
-- Ver resultados inmediatos
-- Luego dejar corriendo automáticamente
-
-### 🆕 Nuevas Funcionalidades
-
-#### ✅ Ejecutar Tests
+### Instalación Rápida
 
 ```bash
-# Ejecutar todos los tests
-pytest tests/ -v
+# Instalar Docker
+curl -fsSL https://get.docker.com | sh
 
-# Con cobertura de código
-pytest tests/ -v --cov=. --cov-report=html
+# Clonar repositorio
+cd /opt
+sudo git clone https://github.com/AndresDvst/BotCryptoV2.git
+cd BotCryptoV2
+sudo chown -R $USER:$USER .
 
-# Ver reporte de cobertura
-# Abre htmlcov/index.html en tu navegador
+# Configurar
+cp .env.example .env
+nano .env  # Añadir tus API keys
+
+# Construir y ejecutar
+sudo docker compose build
+sudo docker compose up -d
+
+# Ver logs
+sudo docker compose logs -f
 ```
 
-#### 📊 Dashboard Web
+### Modo Interactivo (ver menú)
 
 ```bash
-# Iniciar dashboard
-python dashboard/app.py
+# Conectar al contenedor
+sudo docker attach cryptobot
 
-# Abre en tu navegador
-# http://localhost:5000
+# Para salir sin matar el bot: Ctrl+P, Ctrl+Q
 ```
 
-**Características del Dashboard**:
+### noVNC (ver navegador Chrome)
 
-- 📈 Gráficos históricos de Fear & Greed Index
-- 💰 Top monedas del último análisis
-- 📊 Estadísticas generales
-- 🔄 Actualización automática cada 30 segundos
+Accede a `http://TU_IP:6080` para ver el navegador y hacer login en Twitter.
 
-#### 🗄️ Base de Datos
+### Variables de Entorno Docker
 
-La base de datos se crea automáticamente en `data/crypto_bot.db` y guarda:
-
-- Todos los análisis realizados
-- Datos de monedas por análisis
-- Timestamps y métricas
-
-**No requiere configuración adicional** ✅
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `BOT_MODE` | Modo de ejecución (menu, 1, 2, 12) | menu |
+| `DOCKER_ENV` | Detectar entorno Docker | true |
+| `TZ` | Zona horaria | America/Bogota |
 
 ---
 
@@ -377,270 +283,129 @@ La base de datos se crea automáticamente en `data/crypto_bot.db` y guarda:
 
 ```
 BotCryptoV2/
-├── 📄 Archivos Principales
-│   ├── main.py                    # Punto de entrada
-│   ├── bot_orchestrator.py        # Orquestador de servicios
-│   ├── check_setup.py             # Verificador de configuración
-│   ├── cleanup_repo.py            # Script de limpieza
-│   └── requirements.txt           # Dependencias
-│
-├── ⚙️ Configuración
-│   ├── .env                       # Variables de entorno (NO versionar)
-│   ├── .env.example               # Plantilla de configuración
-│   ├── .gitignore                 # Archivos ignorados
-│   └── config/
-│       └── config.py              # Configuración centralizada
-│
-├── 🔧 Servicios
-│   └── services/
-│       ├── binance_service.py     # Consulta a Binance
-│       ├── market_sentiment_service.py  # Análisis de sentimiento
-│       ├── ai_analyzer_service.py # Análisis con IA
-│       ├── telegram_service.py    # Envío a Telegram
-│       └── twitter_service.py     # Publicación en Twitter
-│
-├── 🛠️ Utilidades
-│   └── utils/
-│       └── logger.py              # Sistema de logging
-│
-├── 📂 Datos (generados automáticamente)
-│   ├── images/                    # Imágenes para reportes
-│   ├── logs/                      # Logs diarios
-│   └── tweet_log.json             # Registro de tweets
-│
-└── 📚 Documentación
-    ├── README.md                  # Este archivo
-    ├── ESTRUCTURA_PROYECTO.md     # Documentación técnica
-    ├── COMANDOS_ÚTILES.md         # Comandos útiles
-    ├── GEMINI_SETUP.md            # Guía de Gemini
-    └── TWITTER_SETUP.md           # Guía de Twitter
+├── main.py                    # Punto de entrada
+├── bot_orchestrator.py        # Orquestador de servicios
+├── config/
+│   └── config.py              # Configuración centralizada
+├── services/
+│   ├── binance_service.py     # API Binance
+│   ├── telegram_service.py    # Envío Telegram
+│   ├── twitter_service.py     # Publicación Twitter
+│   ├── ai_analyzer_service.py # Análisis con Gemini
+│   ├── technical_analysis_service.py  # Señales trading
+│   ├── traditional_markets_service.py # Stocks/Forex
+│   ├── news_service.py        # Noticias crypto
+│   ├── price_monitor_service.py # Monitoreo tiempo real
+│   ├── twelve_data_service.py # API Twelve Data
+│   └── backtest_service.py    # Backtesting
+├── core/
+│   ├── indicators.py          # Indicadores técnicos
+│   ├── strategies/            # Estrategias de trading
+│   └── risk/                  # Gestión de riesgo
+├── database/
+│   ├── db_manager.py          # SQLite
+│   └── mysql_manager.py       # MySQL
+├── dashboard/
+│   └── app.py                 # Dashboard Flask
+├── docker/
+│   ├── supervisord.conf       # Gestor procesos
+│   └── entrypoint.sh          # Script inicio
+├── images/                    # Imágenes para reportes
+├── logs/                      # Logs diarios
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
 
-### Flujo de Ejecución
-
-```mermaid
-graph TD
-    A[Inicio] --> B[Validar Configuración]
-    B --> C{Config OK?}
-    C -->|No| D[Mostrar Error y Salir]
-    C -->|Sí| E[Inicializar Servicios]
-    E --> F[Consultar Binance]
-    F --> G[Filtrar Monedas ≥10%]
-    G --> H[Obtener Cambios 2h]
-    H --> I[Analizar Sentimiento]
-    I --> J[Análisis con IA]
-    J --> K[Enviar a Telegram]
-    K --> L[Publicar en Twitter]
-    L --> M{Modo Automático?}
-    M -->|Sí| N[Esperar Próxima Ejecución]
-    N --> F
-    M -->|No| O[Fin]
-```
-
----
-
-## 📊 Ejemplo de Reporte
-
-### Telegram
+### Flujo de Datos
 
 ```
-🚀 REPORTE CRIPTO - Análisis de Mercado
-
-😊 Sentimiento del Mercado: Codicia
-📊 Fear & Greed Index: 68/100 (Codicia)
-
-💎 Top 3 Criptomonedas con Mayor Movimiento:
-
-1. SOL/USDT 📈
-   💰 Precio: $98.45
-   📊 Cambio 24h: +15.32%
-   ⏱ Cambio 2h: +3.21%
-
-2. MATIC/USDT 📈
-   💰 Precio: $0.85
-   📊 Cambio 24h: +12.87%
-   ⏱ Cambio 2h: +1.95%
-
-3. AVAX/USDT 📉
-   💰 Precio: $34.21
-   📊 Cambio 24h: -11.24%
-   ⏱ Cambio 2h: -2.45%
-
-🤖 Recomendación de IA:
-Basado en el análisis actual, SOL muestra el mayor
-potencial de crecimiento con un momentum positivo...
-
-📊 Confianza: 🟢🟢🟢🟢🟢🟢🟢🟢⚪⚪ (8/10)
-```
-
-### Twitter
-
-```
-🚀 #Crypto Market Update
-
-📊 Top Movers (24h):
-• SOL +15.32% 📈
-• MATIC +12.87% 📈
-• AVAX -11.24% 📉
-
-😊 Market Sentiment: Greed (68/100)
-
-🤖 AI Analysis: Positive momentum on SOL...
-
-#Bitcoin #Cryptocurrency #Trading
+Binance API ──┐
+Twelve Data ──┼──▶ Orquestador ──▶ Gemini AI ──▶ Telegram
+CryptoPanic ──┘                                    └──▶ Twitter
 ```
 
 ---
 
 ## 🛠️ Solución de Problemas
 
-### Error: "ModuleNotFoundError"
-
-**Solución**:
+### Error: ChromeDriver no encontrado
 
 ```bash
-pip install -r requirements.txt
+# El bot detecta automáticamente el SO
+# Windows: usa utils/chromedriver.exe
+# Linux/Docker: usa /usr/bin/chromedriver
 ```
 
-### Error: "API Key inválida"
+### Error: Twitter login falla
 
-**Solución**:
+1. Accede a noVNC: `http://TU_IP:6080`
+2. Abre Chrome y haz login manualmente
+3. La sesión se guarda en `chrome_profile/`
 
-1. Verifica que hayas copiado correctamente las claves en `.env`
-2. Asegúrate de no tener espacios extra
-3. Verifica que las claves no hayan expirado
+### Error: API Rate Limit
 
-### Error: "Faltan variables de entorno"
+```bash
+# Twelve Data: 800 req/día (gratis)
+# Gemini: 60 req/min
+# Binance: 1200 req/min
+```
 
-**Solución**:
+### Container se reinicia
 
-1. Verifica que el archivo `.env` exista
-2. Copia `.env.example` a `.env` si no existe
-3. Completa todas las claves requeridas
+```bash
+# Ver logs detallados
+sudo docker compose logs --tail 100
 
-### El bot no envía mensajes a Telegram
+# Entrar al container
+sudo docker exec -it cryptobot bash
+```
 
-**Solución**:
+---
 
-1. Verifica TOKEN y CHAT_ID
-2. Inicia una conversación con tu bot en Telegram
-3. Envía `/start` a tu bot
+## 📊 Imágenes para Reportes
 
-### Twitter no funciona
+Coloca estas imágenes en `images/`:
 
-**Solución**:
+| Archivo | Uso |
+|---------|-----|
+| `REPORTE 2H.png` | Reportes cada 2 horas |
+| `REPORTE 24H.png` | Reporte matutino 6 AM |
+| `ACCIONES.png` | Mercado de acciones |
+| `FOREX.png` | Mercado forex |
+| `MINERALES.png` | Commodities |
+| `SEÑALES.png` | Señales de trading |
 
-1. Verifica permisos de "Read and Write"
-2. Regenera las claves si es necesario
-3. Verifica que Chrome Driver esté actualizado
-
-### "Rate Limit Exceeded"
-
-**Solución**:
-Las APIs tienen límites de uso. Espera unos minutos antes de volver a ejecutar.
+**Tamaño recomendado**: 1200x675 px, < 5MB
 
 ---
 
 ## 🔐 Seguridad
 
-### ⚠️ IMPORTANTE
-
-- ❌ **NUNCA** compartas tu archivo `.env`
-- ❌ **NUNCA** subas tus claves API a GitHub
-- ✅ Usa solo claves API con permisos de **lectura**
-- ✅ Mantén tu `.gitignore` actualizado
-- ✅ Rota tus claves si las expones accidentalmente
-
-### Buenas Prácticas
-
-1. **Claves API**:
-   - Usa permisos mínimos necesarios
-   - Rota claves periódicamente
-   - No compartas claves entre proyectos
-
-2. **Repositorio**:
-   - Verifica `.gitignore` antes de commit
-   - Usa `git status` para revisar archivos
-   - Nunca hagas commit de `.env`
-
-3. **Seguridad del Sistema**:
-   - Mantén Python actualizado
-   - Actualiza dependencias regularmente
-   - Usa antivirus actualizado
-
----
-
-## 📝 Buenas Prácticas
-
-### Antes de Ejecutar
-
-```bash
-# 1. Verificar configuración
-python check_setup.py
-
-# 2. Limpiar archivos temporales
-python cleanup_repo.py
-
-# 3. Verificar .env
-cat .env  # Linux/Mac
-type .env  # Windows
-```
-
-### Durante Ejecución
-
-- Monitorea los logs en `logs/bot_YYYYMMDD.log`
-- Revisa mensajes de error con atención
-- Usa Ctrl+C para detener el bot de forma segura
-
-### Después de Ejecutar
-
-- Revisa los reportes en Telegram
-- Verifica las publicaciones en Twitter
-- Analiza los logs para detectar problemas
-
----
-
-## 🚀 Próximas Funcionalidades
-
-- [ ] Base de datos para histórico de análisis
-- [ ] Dashboard web con gráficos interactivos
-- [ ] Backtesting de estrategias
-- [ ] Alertas personalizadas por WhatsApp
-- [ ] Análisis técnico con indicadores
-- [ ] Integración con más exchanges
-- [ ] Trading automático (AVANZADO)
-- [ ] Tests unitarios
-- [ ] CI/CD con GitHub Actions
+- ❌ **NUNCA** subas `.env` a GitHub
+- ✅ El `.gitignore` protege archivos sensibles
+- ✅ Usa API keys con permisos mínimos (solo lectura en Binance)
+- ✅ El bot detecta rutas de Windows vs Linux automáticamente
 
 ---
 
 ## 📄 Licencia
 
-Proyecto de código abierto para fines educativos.
+MIT License - Proyecto de código abierto para fines educativos.
 
 ---
 
-## ⚠️ DISCLAIMER
+## ⚠️ Disclaimer
 
-Este bot es solo para análisis e información. **NO constituye asesoría financiera**. Investiga antes de invertir. Las criptomonedas son volátiles y puedes perder tu dinero.
+Este bot es solo para análisis e información. **NO constituye asesoría financiera**. Las criptomonedas son volátiles y puedes perder dinero. Investiga antes de invertir.
 
 ---
-
-<div align="center">
-<a href="https://wa.me/+573001234567?text=Hola%20desde%20BotCryptoV2%20🚀" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" /></a>
-<a href="https://twitter.com/AndresDvst25" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/X/Twitter-000000?style=for-the-badge&logo=x&logoColor=white" /></a>
-<a href="https://www.facebook.com/andres.campos.732122" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Facebook-1877F2?style=for-the-badge&logo=facebook&logoColor=white" /></a>
-<a href="https://www.instagram.com/andres.devback/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Instagram-E4405F?style=for-the-badge&logo=instagram&logoColor=white" /></a>
-<a href="https://www.linkedin.com/in/andresdevback22/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" /></a>
-<a href="https://github.com/AndresDvst" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" /></a>
-<a href="https://discord.com/users/1133809866130067476" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" /></a>
-</div>
-
-<br>
 
 <div align="center">
 
 **⭐ Si te gusta este proyecto, dale una estrella en GitHub ⭐**
+
+[WhatsApp](https://wa.link/a3j64p) • [Twitter](https://twitter.com/AndresDvst25) • [LinkedIn](https://www.linkedin.com/in/andresdevback22/) • [GitHub](https://github.com/AndresDvst)
 
 _Hecho con ❤️ por [AndresDvst](https://github.com/AndresDvst)_
 
