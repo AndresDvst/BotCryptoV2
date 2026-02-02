@@ -81,19 +81,43 @@ class TwitterService:
 
             # Ir a la página principal y comprobar si ya hay sesión iniciada
             self.driver.get("https://x.com/home")
-            self._human_delay(2, 4)
+            self._human_delay(3, 5)  # Dar más tiempo para cargar
+            
             try:
-                # Si estamos logueados normalmente existe el área de composición del tweet
-                WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
-                )
-                logger.info("✅ Sesión de Twitter/X ya iniciada (perfil reutilizado)")
-                return True
-            except Exception:
-                # No hay sesión, proceder al flujo de login
-                logger.info("ℹ️ No hay sesión activa, navegando al flujo de login...")
-                self.driver.get("https://x.com/i/flow/login")
-                self._human_delay(3, 5)
+                # Verificar múltiples indicadores de sesión activa
+                session_indicators = [
+                    'div[data-testid="tweetTextarea_0"]',  # Área de composición
+                    'a[data-testid="AppTabBar_Home_Link"]',  # Tab Home activo
+                    'div[data-testid="SideNav_AccountSwitcher_Button"]',  # Botón de cuenta
+                    'a[href="/compose/tweet"]',  # Botón de tweet
+                    'div[data-testid="primaryColumn"]',  # Columna principal del feed
+                ]
+                
+                session_found = False
+                for selector in session_indicators:
+                    try:
+                        WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        logger.info(f"✅ Sesión detectada via: {selector}")
+                        session_found = True
+                        break
+                    except:
+                        continue
+                
+                # También verificar si NO estamos en la página de login
+                current_url = self.driver.current_url
+                if session_found or ('/home' in current_url and '/login' not in current_url and '/flow' not in current_url):
+                    logger.info("✅ Sesión de Twitter/X ya iniciada (perfil reutilizado)")
+                    return True
+                    
+            except Exception as e:
+                logger.debug(f"No se detectó sesión activa: {e}")
+            
+            # No hay sesión, proceder al flujo de login
+            logger.info("ℹ️ No hay sesión activa, navegando al flujo de login...")
+            self.driver.get("https://x.com/i/flow/login")
+            self._human_delay(3, 5)
             
             # Esperar y llenar el campo de usuario
             username_input = WebDriverWait(self.driver, 20).until(
