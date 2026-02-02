@@ -61,14 +61,30 @@ class Config:
     # ========== DETECCIÓN DE ENTORNO (Windows/Linux/Docker) ==========
     IS_DOCKER = os.getenv('DOCKER_ENV', 'false').lower() in ('1', 'true', 'yes') or os.path.exists('/.dockerenv')
     IS_LINUX = os.name != 'nt'
+    IS_WINDOWS = os.name == 'nt'
+    
+    # Helper para detectar rutas de Windows (ignorarlas en Linux)
+    @staticmethod
+    def _is_windows_path(path: str) -> bool:
+        """Detecta si una ruta es de Windows (ej: I:\, C:\, etc.)"""
+        if not path:
+            return False
+        return ':\\' in path or path.startswith('\\\\')
     
     # Ruta para perfil de Chrome (sesión persistente)
+    # En Linux/Docker: ignorar rutas de Windows del .env
+    _env_chrome_user_data = os.getenv('CHROME_USER_DATA_DIR', '')
     if IS_DOCKER:
         CHROME_USER_DATA_DIR = '/app/chrome_profile'
     elif IS_LINUX:
-        CHROME_USER_DATA_DIR = os.path.join(BASE_DIR, 'chrome_profile')
+        # Si el .env tiene ruta de Windows, ignorarla
+        if _is_windows_path.__func__(_env_chrome_user_data):
+            CHROME_USER_DATA_DIR = os.path.join(BASE_DIR, 'chrome_profile')
+        else:
+            CHROME_USER_DATA_DIR = _env_chrome_user_data or os.path.join(BASE_DIR, 'chrome_profile')
     else:
-        CHROME_USER_DATA_DIR = r'I:\Proyectos\BotCryptoV2\chrome_profile'
+        # Windows: usar del .env o default
+        CHROME_USER_DATA_DIR = _env_chrome_user_data or os.path.join(BASE_DIR, 'chrome_profile')
     
     try:
         os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)
@@ -76,22 +92,29 @@ class Config:
         pass
     
     # Binario de Chrome
+    _env_chrome_binary = os.getenv('CHROME_BINARY_PATH', '')
     if IS_DOCKER or IS_LINUX:
-        # En Docker/Linux: usar Chrome del sistema
-        CHROME_BINARY_PATH = os.getenv('CHROME_BINARY_PATH', '/usr/bin/google-chrome')
+        # En Docker/Linux: usar Chrome del sistema, ignorar rutas de Windows
+        if _is_windows_path.__func__(_env_chrome_binary):
+            CHROME_BINARY_PATH = '/usr/bin/google-chrome'
+        else:
+            CHROME_BINARY_PATH = _env_chrome_binary or '/usr/bin/google-chrome'
     else:
         # En Windows: usar Chrome portable del proyecto
         _project_chrome_binary = os.path.join(BASE_DIR, 'utils', 'chrome-win64', 'chrome-win', 'chrome.exe')
-        CHROME_BINARY_PATH = _project_chrome_binary if os.path.isfile(_project_chrome_binary) else os.getenv('CHROME_BINARY_PATH')
+        CHROME_BINARY_PATH = _env_chrome_binary or (_project_chrome_binary if os.path.isfile(_project_chrome_binary) else None)
     
     # Driver de Chrome
+    _env_chromedriver = os.getenv('CHROMEDRIVER_PATH', '')
     if IS_DOCKER or IS_LINUX:
-        CHROMEDRIVER_PATH = os.getenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
+        # En Linux/Docker: ignorar rutas de Windows del .env
+        if _is_windows_path.__func__(_env_chromedriver):
+            CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
+        else:
+            CHROMEDRIVER_PATH = _env_chromedriver or '/usr/bin/chromedriver'
     else:
-        CHROMEDRIVER_PATH = os.getenv(
-            'CHROMEDRIVER_PATH',
-            os.path.join(BASE_DIR, 'utils', 'chromedriver.exe')
-        )
+        # Windows: usar del .env o default
+        CHROMEDRIVER_PATH = _env_chromedriver or os.path.join(BASE_DIR, 'utils', 'chromedriver.exe')
     
     # ========== GOOGLE GEMINI ==========
     GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
