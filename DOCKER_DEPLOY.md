@@ -1,276 +1,375 @@
-# 🐳 Guía de Despliegue en VPS Ubuntu
+# 🚀 Guía de Despliegue en VPS Ubuntu
 
-## 📋 Requisitos Previos
-- VPS Ubuntu 22.04 o 24.04
+Esta guía cubre **dos métodos** de despliegue:
+- **Método A (Recomendado):** Sin Docker, con escritorio remoto XFCE
+- **Método B:** Con Docker (más complejo, problemas conocidos con Chrome)
+
+---
+
+# 📋 Requisitos Previos
+
+- VPS Ubuntu 22.04 o 24.04 (AWS EC2, DigitalOcean, etc.)
 - Mínimo 2GB RAM (recomendado 3GB+)
 - 20GB espacio en disco
-- Puertos 6080 y 5900 abiertos
+- Acceso SSH
 
 ---
 
-## 🚀 PASO 1: Conectar a la VPS
+# 🖥️ MÉTODO A: Sin Docker (RECOMENDADO)
+
+Este método es más estable y permite ver Chrome visualmente para hacer login en Twitter.
+
+## Paso 1: Conectar al VPS
 
 ```bash
-ssh root@TU_IP_VPS
-# O con usuario normal:
-ssh usuario@TU_IP_VPS
+ssh ubuntu@TU_IP_VPS
+# O con clave .pem (AWS):
+ssh -i "tu_clave.pem" ubuntu@TU_IP_VPS
 ```
 
----
-
-## 🔧 PASO 2: Instalar Docker
+## Paso 2: Instalar Escritorio XFCE + XRDP
 
 ```bash
 # Actualizar sistema
 sudo apt update && sudo apt upgrade -y
 
-# Instalar dependencias
-sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+# Instalar escritorio XFCE (ligero, ~500MB RAM)
+sudo apt install -y xfce4 xfce4-goodies
 
-# Añadir clave GPG de Docker
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+# Instalar XRDP (servidor de escritorio remoto)
+sudo apt install -y xrdp
 
-# Añadir repositorio
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+# Configurar XRDP para usar XFCE
+echo "xfce4-session" | tee ~/.xsession
 
-# Instalar Docker
+# Reiniciar XRDP
+sudo systemctl restart xrdp
+sudo systemctl enable xrdp
+
+# Abrir puerto 3389 en el firewall
+sudo ufw allow 3389/tcp
+sudo ufw allow 22/tcp
+sudo ufw enable
+```
+
+## Paso 3: Crear contraseña para el usuario
+
+```bash
+sudo passwd ubuntu
+# Ingresa una contraseña segura (2 veces)
+```
+
+## Paso 4: Abrir puerto 3389 en AWS Security Groups
+
+1. Ve a la consola de AWS EC2
+2. Selecciona tu instancia → Security Groups
+3. Edit inbound rules
+4. Agrega: **Type:** RDP, **Port:** 3389, **Source:** Tu IP o 0.0.0.0/0
+
+## Paso 5: Conectar desde Windows
+
+1. Abre **Conexión a Escritorio remoto** (busca "mstsc" en Windows)
+2. Escribe: `TU_IP_VPS`
+3. Usuario: `ubuntu`
+4. Contraseña: la que creaste
+
+## Paso 6: Instalar Python y dependencias
+
+```bash
+# Agregar repositorio para Python 3.11
+sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Instalar Python 3.11
+sudo apt install -y python3.11 python3.11-venv python3.11-dev
+
+# Clonar el proyecto
+cd ~
+git clone https://github.com/TU_USUARIO/BotCryptoV2.git
+cd BotCryptoV2
+
+# Crear entorno virtual
+python3.11 -m venv venv
+source venv/bin/activate
+
+# Instalar dependencias
+pip install -r requirements.txt
+```
+
+## Paso 7: Instalar Chrome y ChromeDriver
+
+```bash
+# Instalar Chrome
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo dpkg -i google-chrome-stable_current_amd64.deb
+sudo apt --fix-broken install -y
+
+# Instalar ChromeDriver compatible
+CHROME_VERSION=$(google-chrome --version | grep -oP '\d+' | head -1)
+wget "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/$(curl -s https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_VERSION)/linux64/chromedriver-linux64.zip"
+unzip chromedriver-linux64.zip
+sudo mv chromedriver-linux64/chromedriver /usr/bin/chromedriver
+sudo chmod +x /usr/bin/chromedriver
 
 # Verificar instalación
-docker --version
-docker compose version
-
-# (Opcional) Añadir tu usuario al grupo docker para no usar sudo
-sudo usermod -aG docker $USER
-# Cierra sesión y vuelve a entrar para que aplique
+google-chrome --version
+chromedriver --version
 ```
 
----
-
-## 📁 PASO 3: Subir el Proyecto
-
-### Opción A: Con Git (recomendado)
-```bash
-cd /opt
-sudo git clone https://github.com/AndresDvst/BotCryptoV2.git
-cd BotCryptoV2
-sudo chown -R ubuntu:ubuntu .
-```
-
-### Opción B: Con SCP desde tu PC Windows
-```powershell
-# Ejecutar en PowerShell de tu PC
-scp -i "C:\Users\WinterOS\Downloads\key.pem" -r I:\Proyectos\BotCryptoV2 ubuntu@IP:~
-
-### En la vps
-sudo mv ~/BotCryptoV2 /opt/
-sudo chown -R ubuntu:ubuntu /opt/BotCryptoV2
-cd /opt/BotCryptoV2
-
-### Actualizar GIT
-cd /opt/BotCryptoV2
-git init
-git remote add origin https://github.com/AndresDvst/BotCryptoV2.git
-git fetch origin
-git reset --hard origin/main
-```
-
-### Opción C: Con FileZilla
-1. Conectar a la VPS por SFTP
-2. Subir la carpeta a `/opt/BotCryptoV2`
-
----
-
-## ⚙️ PASO 4: Configurar Variables de Entorno
+## Paso 8: Configurar .env
 
 ```bash
-cd /opt/BotCryptoV2
-
-# Copiar el ejemplo
-cp .env.example .env
-
-# Editar con nano
+cd ~/BotCryptoV2
 nano .env
 ```
 
-**Configurar estas variables (OBLIGATORIO):**
+**⚠️ IMPORTANTE:** Dejar vacías las rutas de Windows:
 ```env
-# APIs
-BINANCE_API_KEY=tu_api_key_aqui
-BINANCE_API_SECRET=tu_api_secret_aqui
-GOOGLE_GEMINI_API_KEY=tu_gemini_key_aqui
+# APIs (copiar tus valores reales)
+BINANCE_API_KEY=tu_api_key
+BINANCE_API_SECRET=tu_api_secret
+GOOGLE_GEMINI_API_KEY=tu_gemini_key
 
 # Telegram
-TELEGRAM_BOT_TOKEN=tu_token_aqui
+TELEGRAM_BOT_CRYPTO=tu_token
 TELEGRAM_CHAT_ID=tu_chat_id
+# ... resto de variables
 
-# Twitter (si usas)
+# Twitter
 TWITTER_USERNAME=tu_usuario
 TWITTER_PASSWORD=tu_password
+TWITTER_EMAIL=tu_email
 
-# Twelve Data (opcional)
-TWELVE_DATA_API_KEY=tu_key_aqui
+# IMPORTANTE: Dejar vacías en Linux
+CHROMEDRIVER_PATH=
+CHROME_USER_DATA_DIR=
+TWITTER_HEADLESS=False
 ```
 
-**Guardar:** `Ctrl + O`, Enter, `Ctrl + X`
+Guardar: `Ctrl+X`, `Y`, `Enter`
+
+## Paso 9: Login de Twitter (UNA SOLA VEZ)
+
+**Desde el escritorio remoto (XRDP):**
+
+```bash
+# Abrir Chrome con el perfil del bot
+google-chrome --user-data-dir=/home/ubuntu/BotCryptoV2/chrome_profile
+```
+
+1. Ve a `https://x.com`
+2. Haz login con tu cuenta de Twitter
+3. **Cierra Chrome completamente**
+
+## Paso 10: Ejecutar el Bot
+
+```bash
+cd ~/BotCryptoV2
+source venv/bin/activate
+python main.py
+```
+
+## Paso 11: Ejecutar en Segundo Plano (screen/tmux)
+
+```bash
+# Instalar screen
+sudo apt install -y screen
+
+# Crear sesión
+screen -S cryptobot
+
+# Dentro de la sesión, ejecutar el bot
+cd ~/BotCryptoV2
+source venv/bin/activate
+python main.py
+
+# Para desconectarte sin detener el bot: Ctrl+A, luego D
+
+# Para reconectarte después:
+screen -r cryptobot
+```
 
 ---
 
-## 🔥 PASO 5: Abrir Puertos en el Firewall
+# 🐳 MÉTODO B: Con Docker
+
+⚠️ **Nota:** Este método tiene problemas conocidos con Chrome en Docker. Se recomienda el Método A.
+
+## Problemas conocidos y soluciones:
+
+### 1. Chrome "session not created" error
+- **Causa:** Permisos del perfil de Chrome
+- **Solución:** El código ahora usa `~/.config/cryptobot_chrome_profile` automáticamente
+
+### 2. "cannot create default profile directory"
+- **Causa:** El directorio montado no tiene permisos
+- **Solución:** Agregar `shm_size: '2gb'` en docker-compose.yml
+
+### 3. Perfil de Windows incompatible
+- **Causa:** Copiar chrome_profile de Windows a Linux
+- **Solución:** Eliminar el perfil y crear uno nuevo en Linux
+
+## Instalación con Docker
 
 ```bash
-# Si usas UFW
-sudo ufw allow 6080/tcp   # noVNC
-sudo ufw allow 5900/tcp   # VNC (opcional)
-sudo ufw allow 22/tcp     # SSH
-sudo ufw enable
-sudo ufw status
-```
+# Instalar Docker
+sudo apt update
+sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
----
+# Clonar proyecto
+cd /opt
+sudo git clone https://github.com/TU_USUARIO/BotCryptoV2.git
+cd BotCryptoV2
+sudo chown -R $USER:$USER .
 
-## 🐳 PASO 6: Construir y Ejecutar
+# Configurar .env
+cp .env.example .env
+nano .env  # Configurar variables
 
-```bash
-cd /opt/BotCryptoV2
-
-# Construir la imagen (primera vez, tarda ~5-10 min)
+# Construir y ejecutar
 sudo docker compose build
-
-# Iniciar el contenedor
 sudo docker compose up -d
 
-# Ver logs en tiempo real
+# Ver logs
 sudo docker compose logs -f
 ```
 
----
-
-## 🔑 PASO 7: Login a Twitter (UNA SOLA VEZ)
-
-1. **Abrir en tu navegador:** `http://TU_IP_VPS:6080`
-
-2. Verás el escritorio virtual con Chrome
-
-3. Abre Chrome y ve a `https://twitter.com`
-
-4. Haz login con tu cuenta
-
-5. ¡Listo! La sesión queda guardada en el volumen
+## Acceso a noVNC (para login de Twitter)
+1. Abrir: `http://TU_IP_VPS:6080`
+2. Hacer click derecho → abrir terminal
+3. Ejecutar: `google-chrome`
+4. Login en Twitter
 
 ---
 
-## ✅ PASO 8: Verificar que Funciona
+# 📊 Comandos Útiles
 
+## Sin Docker
 ```bash
-# Ver estado del contenedor
-docker compose ps
+# Ejecutar bot
+cd ~/BotCryptoV2 && source venv/bin/activate && python main.py
 
-# Ver logs del bot
-docker compose logs -f cryptobot
+# Ver sesiones de screen
+screen -ls
 
-# Verificar que Chrome profile existe
-ls -la /opt/BotCryptoV2/chrome_profile/
+# Reconectar a sesión
+screen -r cryptobot
+
+# Matar sesión
+screen -X -S cryptobot quit
 ```
 
----
-
-## 📊 Comandos Útiles
-
+## Con Docker
 ```bash
-# Detener el bot
-docker compose down
+# Estado
+docker compose ps
+
+# Logs
+docker compose logs -f
 
 # Reiniciar
 docker compose restart
 
-# Ver logs
-docker compose logs -f
-
-# Entrar al contenedor (debug)
-docker exec -it cryptobot bash
-
-# Reconstruir después de cambios
-docker compose build --no-cache
-docker compose up -d
-```
-
----
-
-## 🔄 Actualizar el Bot
-
-```bash
-cd /opt/BotCryptoV2
-
 # Detener
 docker compose down
 
-# Actualizar código (si usas git)
-git pull
-
-# O resubir archivos con scp/sftp
-
 # Reconstruir
-docker compose build
-docker compose up -d
+docker compose build --no-cache && docker compose up -d
 ```
 
 ---
 
-## ⚠️ Solución de Problemas
+# 🔧 Solución de Problemas
 
-### Chrome no abre en noVNC
+## Twitter no detecta la sesión
+1. Asegúrate de abrir Chrome **con el perfil del bot**:
+   ```bash
+   google-chrome --user-data-dir=/home/ubuntu/BotCryptoV2/chrome_profile
+   ```
+2. Haz login en Twitter
+3. **Cierra Chrome completamente**
+4. Luego ejecuta el bot
+
+## Error: "ChromeDriver not found"
 ```bash
-docker compose logs | grep -i error
-docker exec -it cryptobot google-chrome --version
+# Verificar instalación
+which chromedriver
+chromedriver --version
+
+# Reinstalar si es necesario
+sudo apt remove chromedriver
+# Seguir instrucciones del Paso 7
 ```
 
-### Sesión de Twitter perdida
+## Error de MySQL (no crítico)
+El bot funciona sin MySQL. Si quieres instalarlo:
 ```bash
-# Verificar que el volumen existe
-docker volume ls
-ls -la /opt/BotCryptoV2/chrome_profile/
-# Si está vacío, hacer login de nuevo en noVNC
+sudo apt install -y mysql-server
+sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '1234';"
+sudo mysql -e "CREATE DATABASE crypto_bot;"
 ```
 
-### El contenedor se reinicia constantemente
+## El bot se cierra al desconectar SSH
+Usa `screen` o `tmux`:
 ```bash
-docker compose logs --tail 100
-# Buscar errores de Python o dependencias
+screen -S cryptobot
+# Ejecutar bot
+# Ctrl+A, D para desconectar
 ```
 
-### Memoria insuficiente
+## Memoria insuficiente
 ```bash
 # Ver uso de memoria
-docker stats
-# Aumentar límite en docker-compose.yml
+free -h
+
+# Crear swap (si no tienes)
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
 ```
 
 ---
 
-## 🔐 Seguridad (Recomendado)
+# 🔐 Seguridad
 
-### Proteger noVNC con contraseña
-Editar `docker/supervisord.conf`:
-```ini
-[program:x11vnc]
-command=/usr/bin/x11vnc -display :99 -forever -shared -rfbport 5900 -passwd TU_PASSWORD_AQUI
-```
-
-### Usar Nginx como proxy con SSL
+## Cambiar puerto SSH (recomendado)
 ```bash
-sudo apt install nginx certbot python3-certbot-nginx
+sudo nano /etc/ssh/sshd_config
+# Cambiar Port 22 a otro número
+sudo systemctl restart sshd
+```
 
-# Configurar proxy inverso para noVNC en puerto 443
+## Configurar fail2ban
+```bash
+sudo apt install -y fail2ban
+sudo systemctl enable fail2ban
 ```
 
 ---
 
-## 📞 Soporte
+# 📞 Resumen Rápido
 
-Si tienes problemas:
-1. Revisa los logs: `docker compose logs -f`
-2. Verifica el .env tiene todas las variables
-3. Comprueba que los puertos están abiertos
-4. Asegúrate de tener suficiente RAM
+## Método A (Sin Docker) - Comandos esenciales:
+```bash
+# Primera vez
+sudo apt update && sudo apt install -y xfce4 xrdp
+sudo passwd ubuntu
+# Conectar con Escritorio Remoto de Windows
+
+# En el servidor
+cd ~/BotCryptoV2
+source venv/bin/activate
+python main.py
+```
+
+## Método B (Docker) - Comandos esenciales:
+```bash
+cd /opt/BotCryptoV2
+sudo docker compose up -d
+# Abrir http://IP:6080 para noVNC
+```
