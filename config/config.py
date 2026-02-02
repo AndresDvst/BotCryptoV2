@@ -59,7 +59,7 @@ class Config:
     TWITTER_HEADLESS = os.getenv('TWITTER_HEADLESS', 'False').lower() in ('1', 'true', 'yes')
     
     # ========== DETECCIÓN DE ENTORNO (Windows/Linux/Docker) ==========
-    IS_DOCKER = os.getenv('DOCKER_ENV', 'false').lower() in ('1', 'true', 'yes')
+    IS_DOCKER = os.getenv('DOCKER_ENV', 'false').lower() in ('1', 'true', 'yes') or os.path.exists('/.dockerenv')
     IS_LINUX = os.name != 'nt'
     
     # Ruta para perfil de Chrome (sesión persistente)
