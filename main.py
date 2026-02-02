@@ -268,9 +268,23 @@ def main():
         manager = BotManager()
         
         # Modo automático para Docker (sin menú interactivo)
+        # BOT_MODE: 1=Análisis Completo, 12=Modo Espera (default), 2=Scheduler
         if Config.IS_DOCKER or '--auto' in sys.argv:
-            logger.info("🐳 Modo Docker/Automático detectado - Iniciando Modo Espera Inteligente")
-            run_smart_wait_mode(manager)
+            bot_mode = os.getenv('BOT_MODE', '12')
+            logger.info(f"🐳 Modo Docker/Automático detectado - BOT_MODE={bot_mode}")
+            
+            if bot_mode == '1':
+                logger.info("🌟 Ejecutando: Análisis Completo")
+                run_complete_cycle(manager)
+                # Después del análisis, entrar en modo espera
+                logger.info("⏰ Análisis completado, entrando en Modo Espera Inteligente...")
+                run_smart_wait_mode(manager)
+            elif bot_mode == '2':
+                logger.info("⏰ Ejecutando: Scheduler automático (cada 2h + 6 AM)")
+                setup_scheduler(manager)
+            else:  # default: 12
+                logger.info("⏰ Ejecutando: Modo Espera Inteligente")
+                run_smart_wait_mode(manager)
             return
         
         # Menú principal mejorado
