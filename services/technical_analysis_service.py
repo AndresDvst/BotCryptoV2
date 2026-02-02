@@ -233,6 +233,11 @@ class TechnicalAnalysisService:
             if os.path.exists(self.STATS_HISTORY_FILE):
                 with open(self.STATS_HISTORY_FILE, 'r') as f:
                     historical = json.load(f)
+                # Asegurar que tenga la estructura correcta
+                if not isinstance(historical, dict):
+                    historical = {'daily_stats': []}
+                if 'daily_stats' not in historical:
+                    historical['daily_stats'] = []
             else:
                 historical = {'daily_stats': []}
             
@@ -1015,6 +1020,11 @@ class TechnicalAnalysisService:
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df.set_index('timestamp', inplace=True)
+                
+                # Verificar que tengamos suficientes datos para calcular indicadores
+                if len(df) < 60:
+                    logger.warning(f"⚠️ Datos insuficientes para {symbol}: {len(df)} filas (necesarias ≥60)")
+                    continue
                 
                 df = self.calculate_indicators(df)
                 
