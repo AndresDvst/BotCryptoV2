@@ -55,8 +55,11 @@ chrome_profile/
 
 # Archivos de debug temporal
 *.html
-*.png
 utils/twitter_login_error_*
+
+# Imágenes - ignorar generadas, pero mantener las de template
+images/signals/*.png
+!images/*.png
 
 # Datos temporales
 tweet_log.json
