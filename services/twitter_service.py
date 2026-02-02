@@ -282,8 +282,12 @@ class TwitterService:
             tweet_box.click()
             self._human_delay(0.5, 1)
             
-            # Insertar texto usando JavaScript para preservar emojis y caracteres especiales
-            self.driver.execute_script("arguments[0].innerText = arguments[1];", tweet_box, text)
+            # Insertar texto usando JavaScript para preservar emojis y disparar eventos
+            self.driver.execute_script("""
+                arguments[0].innerText = arguments[1];
+                arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
+                arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
+            """, tweet_box, text)
             self._human_delay(1, 2)
             
             # Si hay imagen, adjuntarla
