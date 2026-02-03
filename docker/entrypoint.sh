@@ -5,15 +5,19 @@ echo "============================================"
 echo "🚀 BotCryptoV2 - Iniciando contenedor"
 echo "============================================"
 
-# Crear directorios necesarios
+# Nota: Como ahora corremos como appuser, no podemos usar mkdir en /var/log/supervisor si no tenemos permisos.
+# Asumiremos que los directorios necesarios dentro de /app ya existen o tenemos permisos para crearlos.
+
+# Crear directorios necesarios (si no existen)
 mkdir -p /app/chrome_profile
 mkdir -p /app/logs
 mkdir -p /app/images/signals
-mkdir -p /var/log/supervisor
 
-# Permisos
-chmod -R 777 /app/chrome_profile
-chmod -R 777 /app/logs
+# Los permisos ya deberían ser correctos por el chown en Dockerfile,
+# pero nos aseguramos de que el usuario actual pueda escribir.
+# chmod -R 750 es más seguro que 777.
+chmod -R 750 /app/chrome_profile
+chmod -R 750 /app/logs
 
 # Crear archivos de historial si no existen
 for file in news_history.json signals_history.json stats_history.json tweet_history.json traditional_signals_history.json; do
@@ -34,6 +38,7 @@ echo "🔑 Perfil Chrome en: /app/chrome_profile"
 echo "============================================"
 
 # Iniciar servicios gráficos en background
+# Xvfb requiere permisos, asegurarnos de que corre.
 /usr/bin/Xvfb :99 -screen 0 1920x1080x24 &
 sleep 2
 DISPLAY=:99 /usr/bin/fluxbox &

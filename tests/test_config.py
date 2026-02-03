@@ -3,6 +3,7 @@ Tests para el módulo de configuración
 """
 import pytest
 import os
+from unittest.mock import patch, MagicMock
 from config.config import Config
 
 
@@ -21,8 +22,12 @@ class TestConfig:
         assert Config.TELEGRAM_BOT_TOKEN == 'test_telegram_token'
         assert Config.GOOGLE_GEMINI_API_KEY == 'test_gemini_key'
     
-    def test_config_validation_success(self, mock_env_vars):
+    @patch('os.path.exists')
+    def test_config_validation_success(self, mock_exists, mock_env_vars):
         """Test que la validación pasa con todas las variables configuradas"""
+        # Mockear os.path.exists para que devuelva True para todo (imágenes, driver, etc.)
+        mock_exists.return_value = True
+
         from importlib import reload
         import config.config
         reload(config.config)

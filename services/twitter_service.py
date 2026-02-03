@@ -30,14 +30,14 @@ except Exception:
 
 class TwitterService:
     """Servicio para publicar en Twitter usando Selenium"""
-    
+
     def __init__(self):
         """Inicializa el servicio de Twitter"""
         self.username = None  # Se configurará después
         self.password = None  # Se configurará después
         self.driver = None
         logger.info("✅ Servicio de Twitter inicializado")
-    
+
     def _init_driver(self):
         """Inicializa el driver de Chrome usando BrowserManager"""
         from utils.browser_utils import BrowserManager
@@ -48,25 +48,25 @@ class TwitterService:
         else:
             logger.error("❌ Servicio de Twitter: Falló la inicialización del driver")
             return False
-    
+
     def _human_type(self, element, text: str):
         """Simula escritura humana con delays aleatorios"""
         for char in text:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))
-    
+
     def _human_delay(self, min_seconds: float = 1, max_seconds: float = 3):
         """Pausa con tiempo aleatorio para simular comportamiento humano"""
         time.sleep(random.uniform(min_seconds, max_seconds))
-    
+
     def login_twitter(self, username: str, password: str) -> bool:
         """
         Inicia sesión en Twitter.
-        
+
         Args:
             username: Nombre de usuario o email de Twitter
             password: Contraseña de Twitter
-            
+
         Returns:
             True si el login fue exitoso
         """
@@ -76,13 +76,13 @@ class TwitterService:
                 if not ok:
                     logger.error("❌ Driver no inicializado. Abortando login de Twitter.")
                     return False
-            
+
             logger.info("🔐 Iniciando sesión en Twitter...")
 
             # Ir a la página principal y comprobar si ya hay sesión iniciada
             self.driver.get("https://x.com/home")
             self._human_delay(3, 5)  # Dar más tiempo para cargar
-            
+
             try:
                 # Verificar múltiples indicadores de sesión activa
                 session_indicators = [
@@ -92,7 +92,7 @@ class TwitterService:
                     'a[href="/compose/tweet"]',  # Botón de tweet
                     'div[data-testid="primaryColumn"]',  # Columna principal del feed
                 ]
-                
+
                 session_found = False
                 for selector in session_indicators:
                     try:
@@ -104,74 +104,75 @@ class TwitterService:
                         break
                     except:
                         continue
-                
+
                 # También verificar si NO estamos en la página de login
                 current_url = self.driver.current_url
                 if session_found or ('/home' in current_url and '/login' not in current_url and '/flow' not in current_url):
                     logger.info("✅ Sesión de Twitter/X ya iniciada (perfil reutilizado)")
                     return True
-                    
+
             except Exception as e:
                 logger.debug(f"No se detectó sesión activa: {e}")
-            
+
             # No hay sesión, proceder al flujo de login
             logger.info("ℹ️ No hay sesión activa, navegando al flujo de login...")
             self.driver.get("https://x.com/i/flow/login")
             self._human_delay(3, 5)
-            
+
             # Esperar y llenar el campo de usuario
             username_input = WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[autocomplete="username"]'))
             )
             self._human_type(username_input, username)
             self._human_delay(0.5, 1)
-            
+
             # Siguiente
             next_button = self.driver.find_element(By.XPATH, '//span[text()="Next" or text()="Siguiente"]')
             next_button.click()
             self._human_delay(2, 3)
-            
+
             # Llenar contraseña
             password_input = WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="password"]'))
             )
             self._human_type(password_input, password)
             self._human_delay(0.5, 1)
-            
+
             # Login
             login_button = self.driver.find_element(By.XPATH, '//span[text()="Log in" or text()="Iniciar sesión"]')
             login_button.click()
             self._human_delay(3, 5)
-            
+
             logger.info("✅ Login exitoso en Twitter")
             return True
-            
+
         except Exception as e:
             # Sanitizar el mensaje de error para no exponer credenciales
             safe_error = sanitize_exception(e)
             logger.error(f"❌ Error al hacer login en Twitter: {safe_error}")
+
+            # --- SECURITY FIX: No guardar raw page source ---
+            # Guardar solo screenshot sanitizado si es posible, o nada.
             try:
                 # Guardar artefactos para depuración
                 os.makedirs('utils', exist_ok=True)
                 ts = datetime.now().strftime('%Y%m%d_%H%M%S')
                 if self.driver:
                     screenshot_path = os.path.join('utils', f'twitter_login_error_{ts}.png')
-                    html_path = os.path.join('utils', f'twitter_login_error_{ts}.html')
+                    # Eliminado el guardado de HTML para evitar robo de credenciales en texto plano
                     try:
                         self.driver.save_screenshot(screenshot_path)
-                        with open(html_path, 'w', encoding='utf-8') as f:
-                            f.write(self.driver.page_source)
                         logger.error(f"📎 Captura guardada: {screenshot_path}")
-                        logger.error(f"📄 HTML guardado: {html_path}")
+                        # logger.error(f"📄 HTML NO guardado por seguridad")
                     except Exception as save_err:
-                        logger.error(f"❌ Error guardando captura/HTML: {sanitize_exception(save_err)}")
+                        logger.error(f"❌ Error guardando captura: {sanitize_exception(save_err)}")
             except Exception:
                 pass
-            
+
             # Cerrar driver en caso de error para evitar fugas de recursos
             self._safe_close_driver()
             return False
-    
+
     def _safe_close_driver(self):
         """Cierra el driver de forma segura"""
         if self.driver:
@@ -180,10 +181,10 @@ class TwitterService:
             except Exception:
                 pass
             self.driver = None
-    
+
     def _history_path(self) -> str:
         return os.path.join(os.getcwd(), 'tweet_history.json')
-    
+
     def _load_history(self) -> list:
         try:
             path = self._history_path()
@@ -193,7 +194,7 @@ class TwitterService:
         except Exception:
             pass
         return []
-    
+
     def _save_history(self, history: list):
         try:
             if len(history) > 1000:
@@ -202,10 +203,10 @@ class TwitterService:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
-    
+
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(text.strip().encode('utf-8')).hexdigest()
-    
+
     def _is_duplicate_recent(self, text: str, hours: float = 2.0) -> bool:
         try:
             h = self._hash_text(text)
@@ -216,7 +217,7 @@ class TwitterService:
         except Exception:
             return False
         return False
-    
+
     def _register_tweet(self, text: str, category: str):
         try:
             history = self._load_history()
@@ -228,7 +229,7 @@ class TwitterService:
             self._save_history(history)
         except Exception:
             pass
-    
+
     def _mutate_crypto_text(self, text: str) -> str:
         try:
             import re
@@ -241,16 +242,16 @@ class TwitterService:
             return (text.strip() + "\n2ND ANUNCIO").strip()
         except Exception:
             return (text.strip() + "\n2ND ANUNCIO").strip()
-    
+
     def post_tweet(self, text: str, image_path: str = None, category: str = 'crypto') -> bool:
         """
         Publica un tweet con texto y opcionalmente una imagen.
-        
+
         Args:
             text: Texto del tweet (máximo 280 caracteres)
             image_path: Ruta de la imagen a adjuntar (opcional)
             category: Categoría de publicación ('crypto', 'markets', 'news', 'signals', 'crypto_stable')
-            
+
         Returns:
             True si se publicó correctamente
         """
@@ -258,7 +259,7 @@ class TwitterService:
             if not self.driver:
                 logger.error("❌ Driver no inicializado. Ejecuta login_twitter primero.")
                 return False
-            
+
             if self._is_duplicate_recent(text, hours=2.0):
                 if category in ('markets', 'news', 'crypto_stable'):
                     logger.info("⏭️ Tweet duplicado en las últimas 2h, saltando publicación")
@@ -266,22 +267,22 @@ class TwitterService:
                 else:
                     logger.info("♻️ Tweet duplicado detectado (crypto). Ajustando contenido con '2ND ANUNCIO'")
                     text = self._mutate_crypto_text(text)
-            
+
             logger.info("📝 Publicando tweet...")
-            
+
             # Ir a la página principal
             self.driver.get("https://x.com/home")
             self._human_delay(2, 3)
-            
+
             # Encontrar el área de texto del tweet
             tweet_box = WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
             )
-            
+
             # Hacer clic en el área de texto
             tweet_box.click()
             self._human_delay(0.5, 1)
-            
+
             # Insertar texto usando JavaScript para preservar emojis y disparar eventos
             self.driver.execute_script("""
                 arguments[0].innerText = arguments[1];
@@ -289,7 +290,7 @@ class TwitterService:
                 arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
             """, tweet_box, text)
             self._human_delay(1, 2)
-            
+
             # Si hay imagen, adjuntarla
             if image_path and os.path.exists(image_path):
                 try:
@@ -300,11 +301,11 @@ class TwitterService:
                     self._human_delay(2, 3)
                 except Exception as img_error:
                     logger.warning(f"⚠️ No se pudo adjuntar imagen: {img_error}")
-            
+
             # Presionar el botón Publicar automáticamente
             try:
                 self._human_delay(1, 2)
-                
+
                 # Estrategia 1: Buscar por CSS selector
                 try:
                     post_button = WebDriverWait(self.driver, 5).until(
@@ -313,7 +314,7 @@ class TwitterService:
                     logger.info("✅ Botón encontrado por CSS selector")
                     post_button.click()
                     self._human_delay(3, 4)  # Esperar más tiempo para que se procese
-                    
+
                     # Verificar que el tweet fue publicado esperando a que desaparezca el textarea
                     try:
                         WebDriverWait(self.driver, 5).until(
@@ -331,7 +332,7 @@ class TwitterService:
                         return True
                 except:
                     pass
-                
+
                 # Estrategia 2: Buscar por aria-label
                 try:
                     buttons = self.driver.find_elements(By.TAG_NAME, "button")
@@ -343,7 +344,7 @@ class TwitterService:
                                 self._human_delay(0.5, 1)
                                 button.click()
                                 self._human_delay(3, 4)
-                                
+
                                 # Verificar que se publicó
                                 try:
                                     WebDriverWait(self.driver, 5).until(
@@ -351,7 +352,7 @@ class TwitterService:
                                     )
                                 except:
                                     pass
-                                
+
                                 logger.info("✅ Tweet publicado exitosamente")
                                 try:
                                     self._register_tweet(text, category)
@@ -360,7 +361,7 @@ class TwitterService:
                                 return True
                 except:
                     pass
-                
+
                 # Estrategia 3: Buscar por JavaScript (más confiable)
                 try:
                     logger.info("🔍 Buscando botón con JavaScript...")
@@ -382,7 +383,7 @@ class TwitterService:
                         logger.info("✅ Botón encontrado con JavaScript")
                         self.driver.execute_script("arguments[0].click();", post_button)
                         self._human_delay(3, 4)
-                        
+
                         # Verificar que se publicó
                         try:
                             WebDriverWait(self.driver, 5).until(
@@ -390,7 +391,7 @@ class TwitterService:
                             )
                         except:
                             pass
-                        
+
                         logger.info("✅ Tweet publicado exitosamente")
                         try:
                             self._register_tweet(text, category)
@@ -399,20 +400,20 @@ class TwitterService:
                         return True
                 except Exception as js_error:
                     logger.warning(f"⚠️ Error con JavaScript: {js_error}")
-                
+
                 # Estrategia 4: Última opción - buscar visible button cerca del textarea
                 try:
                     logger.info("🔍 Buscando botón visible cerca del textarea...")
                     textarea = self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]')
                     parent = textarea.find_element(By.XPATH, '../../..')
                     buttons = parent.find_elements(By.TAG_NAME, "button")
-                    
+
                     # Encontrar el botón más visible/enabled
                     for button in buttons:
                         if button.is_displayed() and button.is_enabled():
                             button.click()
                             self._human_delay(3, 4)
-                            
+
                             # Verificar que se publicó
                             try:
                                 WebDriverWait(self.driver, 5).until(
@@ -420,7 +421,7 @@ class TwitterService:
                                 )
                             except:
                                 pass
-                            
+
                             logger.info("✅ Tweet publicado exitosamente")
                             try:
                                 self._register_tweet(text, category)
@@ -429,18 +430,18 @@ class TwitterService:
                             return True
                 except Exception as parent_error:
                     logger.warning(f"⚠️ Error buscando en parent: {parent_error}")
-                
+
                 logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
                 return False
-                    
+
             except Exception as post_error:
                 logger.error(f"❌ Error al presionar botón Publicar: {post_error}")
                 return False
-            
+
         except Exception as e:
             logger.error(f"❌ Error al publicar tweet: {e}")
             return False
-    
+
     def close(self):
         """Cierra el navegador"""
         if self.driver:
