@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import talib.abstract as ta
-from utils import validate_dataframe
+from utils.security import validate_dataframe
 
 from utils.logger import logger
 from config.config import Config
