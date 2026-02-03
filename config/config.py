@@ -141,6 +141,9 @@ class Config:
     MORNING_POST_TIME = "06:00"  # Hora del reporte matutino
     REPORT_INTERVAL_HOURS = 2     # Intervalo para reportes cada 2 horas
     TWITTER_POST_DELAY = 10       # Segundos de espera entre tweets
+
+    # Número de pares por volumen a escanear para cálculo de cambio 2h (evita usar only-significant)
+    BINANCE_TOP_2H_SCAN_LIMIT = int(os.getenv('BINANCE_TOP_2H_SCAN_LIMIT', '150'))  # Ajustable via .env
     
     # ========== LISTAS MERCADOS TRADICIONALES ==========
     STOCK_SYMBOLS_DEFAULT = [

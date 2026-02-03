@@ -2,6 +2,8 @@ import logging
 import sys
 from datetime import datetime
 
+from utils.security import sanitize_log_message
+
 class ColoredFormatter(logging.Formatter):
     """Formateador con colores para terminal"""
     
@@ -19,6 +21,25 @@ class ColoredFormatter(logging.Formatter):
         record.levelname = f"{log_color}{record.levelname}{self.RESET}"
         return super().format(record)
 
+
+class SecretsRedactionFilter(logging.Filter):
+    """Filtro de logging que redacciona secretos sensibles antes de escribir logs"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            # Reemplazar el mensaje y los argumentos con versiones sanitizadas
+            msg = str(record.getMessage())
+            record.msg = sanitize_log_message(msg)
+            if record.args:
+                if isinstance(record.args, tuple):
+                    record.args = tuple(sanitize_log_message(str(a)) for a in record.args)
+                else:
+                    record.args = sanitize_log_message(str(record.args))
+        except Exception:
+            # Si falla la sanitización, no bloquear el log
+            pass
+        return True
+
 # Configurar logger
 logger = logging.getLogger('CryptoBot')
 logger.setLevel(logging.DEBUG)  # Mostrar TODO
@@ -35,6 +56,7 @@ console_formatter = ColoredFormatter(
     datefmt='%H:%M:%S'
 )
 console_handler.setFormatter(console_formatter)
+console_handler.addFilter(SecretsRedactionFilter())
 
 # Handler para archivo (sin colores)
 file_handler = logging.FileHandler('crypto_bot.log', encoding='utf-8')
@@ -43,6 +65,7 @@ file_formatter = logging.Formatter(
     '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
 )
 file_handler.setFormatter(file_formatter)
+file_handler.addFilter(SecretsRedactionFilter())
 
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)

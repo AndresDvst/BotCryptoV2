@@ -218,6 +218,10 @@ if __name__ == '__main__':
     if os.getenv('DASHBOARD_PASSWORD'):
         logger.info("🔐 Autenticación habilitada (DASHBOARD_PASSWORD configurada)")
     else:
-        logger.warning("⚠️ Autenticación deshabilitada. Configure DASHBOARD_PASSWORD para habilitar.")
+        # Forzar autenticación en entornos de producción (Docker) o si se exige
+        if getattr(Config, 'IS_DOCKER', False) or os.getenv('FORCE_DASHBOARD_AUTH', '0') == '1':
+            logger.critical("❌ DASHBOARD_PASSWORD no configurada en entorno de producción. Abortando inicio.")
+            raise SystemExit('DASHBOARD_PASSWORD required in production')
+        logger.warning("⚠️ Autenticación deshabilitada (solo para entornos locales). Configure DASHBOARD_PASSWORD para habilitar.")
     # Debug desactivado para producción local
     app.run(debug=False, port=5000, host='127.0.0.1')

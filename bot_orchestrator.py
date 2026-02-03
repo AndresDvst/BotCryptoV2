@@ -17,6 +17,7 @@ from services.news_service import NewsService
 from services.backtest_service import BacktestService
 from config.config import Config
 from utils.logger import logger
+from utils.security import get_redactor
 from datetime import datetime, timedelta
 import time
 import json
@@ -79,6 +80,13 @@ class CryptoBotOrchestrator:
         self._category_last_pub: Dict[str, float] = self._load_last_publication_time()
         self._init_all_services()
         self._bind_service_attrs()
+
+        # Registrar secretos desde Config en el redactor global para evitar fugas en logs
+        try:
+            get_redactor().register_secrets_from_config(Config)
+        except Exception:
+            pass
+
         if getattr(Config, "TWITTER_USERNAME", None) and getattr(Config, "TWITTER_PASSWORD", None):
             try:
                 self.twitter.login_twitter(Config.TWITTER_USERNAME, Config.TWITTER_PASSWORD)
@@ -193,7 +201,25 @@ class CryptoBotOrchestrator:
             if not significant_coins:
                 raise self.RecoverableError("Sin monedas significativas")
         with perf.step("binance_2h"):
-            coins_enriched = self.binance.get_2hour_change(significant_coins)
+            # Enriquecer monedas con cambio 2h sobre una muestra amplia del mercado (top por volumen)
+            try:
+                all_tickers = self.binance.get_all_tickers()
+                # Filtrar pares USDT y ordenar por volumen (quoteVolume o volume)
+                usdt_pairs = [ (s, d) for s, d in all_tickers.items() if s.endswith('/USDT') ]
+                usdt_pairs_sorted = sorted(
+                    usdt_pairs,
+                    key=lambda sd: float(sd[1].get('quoteVolume') or sd[1].get('volume') or 0.0),
+                    reverse=True,
+                )
+
+                top_n = int(getattr(Config, 'BINANCE_TOP_2H_SCAN_LIMIT', 150))
+                top_symbols = [s for s, _ in usdt_pairs_sorted[:top_n]]
+                coins_for_2h = [{'symbol': sym} for sym in top_symbols]
+                coins_enriched = self.binance.get_2hour_change(coins_for_2h)
+            except Exception as e:
+                logger.warning(f"⚠️ Error obteniendo cambios 2h globales: {e}")
+                # Fallback: enriquecer solo las monedas significativas (comportamiento previo)
+                coins_enriched = self.binance.get_2hour_change(significant_coins)
         with perf.step("technical_analysis"):
             technical_signals = None
             if self.technical_analysis:
