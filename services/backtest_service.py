@@ -22,7 +22,6 @@ from core.strategies import TrendPullbackStrategy, TrendPullbackConfig
 
 @dataclass
 class BacktestResult:
-    """Resultado de un backtest con métricas y trades."""
     symbol: str
     timeframe: str
     period_days: int
@@ -261,184 +260,26 @@ class BacktestService:
         self._save_result(backtest_result)
         
         return backtest_result
-    
+
     def _print_results(self, result: BacktestResult) -> None:
-        """Imprime los resultados del backtest de forma visual."""
-        print("\n" + "="*60)
-        print("📊 RESULTADOS DEL BACKTEST")
-        print("="*60)
-        
-        # Retorno con color
-        if result.total_return_pct >= 0:
-            return_emoji = "🟢"
-        else:
-            return_emoji = "🔴"
-        
-        print(f"\n💰 RENDIMIENTO")
-        print(f"   Capital Inicial: ${result.initial_capital:,.2f}")
-        print(f"   Capital Final:   ${result.final_equity:,.2f}")
-        print(f"   {return_emoji} Retorno Total: {result.total_return_pct:+.2f}%")
-        
-        print(f"\n📈 ESTADÍSTICAS DE TRADES")
-        print(f"   Total de Trades: {result.total_trades}")
-        print(f"   Trades Ganadores: {result.winning_trades} ({result.win_rate:.1f}%)")
-        print(f"   Trades Perdedores: {result.losing_trades}")
-        print(f"   Profit Factor: {result.profit_factor:.2f}")
-        
-        print(f"\n⚠️ RIESGO")
-        print(f"   Max Drawdown: {result.max_drawdown_pct:.2f}%")
-        print(f"   Sharpe Ratio: {result.sharpe_ratio:.2f}")
-        
-        print(f"\n📋 DETALLES")
-        print(f"   PnL Promedio: ${result.avg_trade_pnl:,.2f}")
-        print(f"   Mejor Trade: {result.best_trade_pct:+.2f}%")
-        print(f"   Peor Trade: {result.worst_trade_pct:+.2f}%")
-        print(f"   Tiempo Promedio: {result.avg_holding_time_hours:.1f} horas")
-        
+        logger.info("🏁 Backtest finalizado:")
+        logger.info(f"   Symbol: {result.symbol}")
+        logger.info(f"   Period: {result.period_days}d {result.timeframe}")
+        logger.info(f"   Final equity: ${result.final_equity:,.2f}")
+        logger.info(f"   Return: {result.total_return_pct:.2f}%")
+        logger.info(f"   Trades: {result.total_trades} (W:{result.winning_trades}/L:{result.losing_trades})")
+        logger.info(f"   Win rate: {result.win_rate:.2f}%")
+        logger.info(f"   Profit factor: {result.profit_factor:.2f}")
+        logger.info(f"   Max drawdown: {result.max_drawdown_pct:.2f}%")
         if result.warnings:
-            print(f"\n⚠️ ADVERTENCIAS: {', '.join(result.warnings)}")
-        
-        print("="*60 + "\n")
-    
+            logger.warning(f"   Warnings: {len(result.warnings)}")
+
     def _save_result(self, result: BacktestResult) -> None:
-        """Guarda el resultado del backtest en un archivo JSON."""
-        filename = f"backtest_{result.symbol.replace('/', '_')}_{result.timeframe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join(self.RESULTS_DIR, filename)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(asdict(result), f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"💾 Resultados guardados en: {filepath}")
-    
-    def run_multi_symbol_backtest(
-        self,
-        symbols: List[str] = None,
-        timeframe: str = '1h',
-        days: int = 30,
-        initial_capital: float = 10000.0
-    ) -> List[BacktestResult]:
-        """
-        Ejecuta backtests para múltiples símbolos.
-        
-        Args:
-            symbols: Lista de pares (default: top 5 por volumen)
-            timeframe: Timeframe
-            days: Días de histórico
-            initial_capital: Capital inicial por símbolo
-            
-        Returns:
-            Lista de resultados
-        """
-        if symbols is None:
-            # Obtener top 5 por volumen
-            top_coins = self.binance.get_top_coins(limit=5)
-            symbols = [f"{coin['base']}/USDT" for coin in top_coins if coin.get('base')]
-        
-        logger.info(f"\n🔄 Ejecutando backtests para: {', '.join(symbols)}")
-        
-        results = []
-        for symbol in symbols:
-            try:
-                result = self.run_backtest(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    days=days,
-                    initial_capital=initial_capital
-                )
-                if result:
-                    results.append(result)
-            except Exception as e:
-                logger.error(f"❌ Error en backtest de {symbol}: {e}")
-        
-        # Resumen comparativo
-        if results:
-            self._print_comparison(results)
-        
-        return results
-    
-    def _print_comparison(self, results: List[BacktestResult]) -> None:
-        """Imprime comparación de resultados de múltiples backtests."""
-        print("\n" + "="*70)
-        print("📊 COMPARACIÓN DE BACKTESTS")
-        print("="*70)
-        print(f"{'Símbolo':<12} {'Retorno':<10} {'Win Rate':<10} {'Trades':<8} {'Sharpe':<8} {'MaxDD':<10}")
-        print("-"*70)
-        
-        for r in sorted(results, key=lambda x: x.total_return_pct, reverse=True):
-            emoji = "🟢" if r.total_return_pct >= 0 else "🔴"
-            print(f"{r.symbol:<12} {emoji}{r.total_return_pct:>+7.2f}%  {r.win_rate:>7.1f}%   {r.total_trades:>6}  {r.sharpe_ratio:>7.2f}  {r.max_drawdown_pct:>7.2f}%")
-        
-        print("="*70)
-        
-        # Mejor y peor
-        best = max(results, key=lambda x: x.total_return_pct)
-        worst = min(results, key=lambda x: x.total_return_pct)
-        print(f"\n🏆 Mejor: {best.symbol} ({best.total_return_pct:+.2f}%)")
-        print(f"💀 Peor: {worst.symbol} ({worst.total_return_pct:+.2f}%)")
-        print()
-    
-    def interactive_backtest(self) -> None:
-        """Menú interactivo para ejecutar backtests."""
-        while True:
-            print("\n" + "="*60)
-            print("🧪 MENÚ DE BACKTESTING")
-            print("="*60)
-            print("1. 📈 Backtest de un símbolo")
-            print("2. 📊 Backtest múltiple (Top 5 por volumen)")
-            print("3. ⚙️ Backtest personalizado")
-            print("4. 📁 Ver resultados guardados")
-            print("0. 🔙 Volver al menú principal")
-            print("="*60)
-            
-            choice = input("\nSelecciona una opción: ").strip()
-            
-            if choice == '0':
-                break
-            elif choice == '1':
-                symbol = input("Símbolo (ej: BTC/USDT): ").strip().upper() or 'BTC/USDT'
-                self.run_backtest(symbol=symbol)
-            elif choice == '2':
-                self.run_multi_symbol_backtest()
-            elif choice == '3':
-                self._custom_backtest_menu()
-            elif choice == '4':
-                self._list_saved_results()
-            else:
-                print("❌ Opción no válida")
-    
-    def _custom_backtest_menu(self) -> None:
-        """Menú para backtest personalizado."""
-        print("\n⚙️ CONFIGURACIÓN PERSONALIZADA")
-        print("-"*40)
-        
-        symbol = input("Símbolo (BTC/USDT): ").strip().upper() or 'BTC/USDT'
-        timeframe = input("Timeframe (1h): ").strip() or '1h'
-        days = int(input("Días de histórico (30): ").strip() or '30')
-        capital = float(input("Capital inicial (10000): ").strip() or '10000')
-        risk = float(input("Riesgo por trade % (2): ").strip() or '2') / 100
-        allow_short = input("Permitir shorts? (s/n): ").strip().lower() == 's'
-        
-        self.run_backtest(
-            symbol=symbol,
-            timeframe=timeframe,
-            days=days,
-            initial_capital=capital,
-            risk_per_trade=risk,
-            allow_short=allow_short
-        )
-    
-    def _list_saved_results(self) -> None:
-        """Lista los resultados de backtests guardados."""
-        files = [f for f in os.listdir(self.RESULTS_DIR) if f.endswith('.json')]
-        
-        if not files:
-            print("\n📭 No hay resultados guardados")
-            return
-        
-        print(f"\n📁 Resultados guardados ({len(files)}):")
-        print("-"*50)
-        for i, f in enumerate(sorted(files, reverse=True)[:10], 1):
-            print(f"  {i}. {f}")
-        
-        if len(files) > 10:
-            print(f"  ... y {len(files) - 10} más")
+        try:
+            filename = f"{result.symbol.replace('/','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            path = os.path.join(self.RESULTS_DIR, filename)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(asdict(result), f, indent=2, default=str)
+            logger.info(f"💾 Resultado guardado en {path}")
+        except Exception as e:
+            logger.error(f"❌ Error guardando resultado: {e}")

@@ -52,6 +52,7 @@ utils/chrome-win64/
 chromedriver.exe
 *.crx
 chrome_profile/
+external/
 
 # Archivos de debug temporal
 *.html

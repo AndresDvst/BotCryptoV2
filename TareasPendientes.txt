@@ -1,4 +1,129 @@
 
 
 
-https://t.me/AndresDvst
+CONTEXTO GENERAL
+
+Tengo un bot propio ya funcional para análisis y generación de señales de criptomonedas.
+El bot tiene su arquitectura definida, su pipeline de datos, su flujo de análisis y su sistema de salida de señales.
+
+En una carpeta SEPARADA he descargado el repositorio open-source Freqtrade, el cual usaré EXCLUSIVAMENTE como referencia técnica y conceptual de buenas prácticas.
+
+OBJETIVO PRINCIPAL
+
+Integrar en mi bot ÚNICAMENTE la lógica de análisis técnico y generación de señales de Freqtrade,
+SIN importar su framework, SIN copiar su motor interno y SIN modificar la arquitectura existente de mi proyecto.
+
+El resultado debe ser:
+
+Estable
+
+Predecible
+
+Libre de errores de ejecución
+
+Fácil de mantener
+
+REGLAS ABSOLUTAS (NO NEGOCIABLES)
+
+❌ NO reestructurar carpetas
+❌ NO cambiar el flujo actual del bot
+❌ NO renombrar funciones o clases existentes
+❌ NO introducir lógica de trading automático
+❌ NO copiar código interno de Freqtrade que dependa de su engine
+❌ NO introducir dependencias nuevas sin verificar compatibilidad
+
+LO QUE SÍ DEBES HACER
+
+✔ Analizar cómo Freqtrade separa correctamente:
+
+cálculo de indicadores
+
+confirmación de tendencia
+
+condiciones de entrada
+
+condiciones de salida
+
+✔ Reimplementar esa lógica de forma nativa dentro de mi bot
+✔ Usar exclusivamente estructuras ya existentes (DataFrame, arrays, dicts, etc.)
+✔ Mantener las señales como:
+
+BUY / SELL / HOLD
+(o el equivalente exacto que ya use mi bot)
+
+NIVEL DE ANÁLISIS REQUERIDO (OBLIGATORIO)
+
+El sistema de señales debe cumplir TODAS estas condiciones:
+
+📊 Indicadores técnicos
+
+RSI (no usado de forma aislada)
+
+EMA / SMA (cruces + tendencia)
+
+MACD (confirmación, no señal primaria)
+
+Bollinger Bands (volatilidad y contexto)
+
+Volumen (confirmación, no trigger)
+
+🧠 Lógica profesional
+
+Ningún indicador debe generar señales por sí solo
+
+Las señales deben basarse en confluencia
+
+Filtrado de mercado lateral
+
+Confirmación de tendencia en timeframe principal
+
+Reglas claras y determinísticas
+
+REQUISITOS DE CALIDAD DEL CÓDIGO
+
+Código defensivo (validaciones de datos vacíos o NaN)
+
+Sin hardcodeo innecesario
+
+Funciones pequeñas, claras y testeables
+
+Separación estricta entre:
+
+cálculo de indicadores
+
+evaluación de señales
+
+Comentarios solo donde aporten valor real
+
+PREVENCIÓN DE ERRORES (MUY IMPORTANTE)
+
+Antes de generar el código:
+
+Verifica que todas las columnas usadas existan
+
+Maneja correctamente NaN y warm-up periods
+
+Evita dependencias implícitas
+
+No asumas timeframes que el bot no usa
+
+No introduzcas lógica que dependa de estados externos
+
+FORMATO FINAL ESPERADO
+
+Código listo para integrarse
+
+Sin referencias directas a Freqtrade
+
+Compatible con el flujo actual del bot
+
+Fácil de extender en el futuro
+
+REGLA DE ORO FINAL
+
+El resultado DEBE sentirse como una evolución natural del bot,
+no como un código copiado de otro proyecto.
+
+Si alguna parte del análisis de Freqtrade no encaja con la estructura actual, ADÁPTALA, no la fuerces.
+
+ademas chat has un anailisis profund del bot y verifica que problemas, necesito saber que esta mal en este proyecto porque estoy tenindo muchos errores, ten en cuenta que el proyecto se desarrolla y se prueba en windows y se ejecuta en linux en producion, dime todo, todo lo que este mal aqui

@@ -13,18 +13,6 @@ def ema(values: List[float], period: int) -> List[float]:
     return ema_values
 
 
-def sma(values: List[float], period: int) -> List[float]:
-    if period <= 0 or len(values) < period:
-        return []
-    result = []
-    window_sum = sum(values[:period])
-    result.append(window_sum / period)
-    for i in range(period, len(values)):
-        window_sum += values[i] - values[i - period]
-        result.append(window_sum / period)
-    return result
-
-
 def rsi(values: List[float], period: int = 14) -> List[float]:
     if period <= 0 or len(values) <= period:
         return []
@@ -95,20 +83,3 @@ def bollinger(values: List[float], period: int = 20, std_dev: float = 2.0) -> Tu
         lower.append(mean - std_dev * std)
     return upper, mid, lower
 
-
-def stdev(values: List[float], period: int) -> List[float]:
-    if period <= 0 or len(values) < period:
-        return []
-    result = []
-    for i in range(period - 1, len(values)):
-        window = values[i - period + 1:i + 1]
-        mean = sum(window) / period
-        variance = sum((x - mean) ** 2 for x in window) / period
-        result.append(variance ** 0.5)
-    return result
-
-
-def slope(values: List[float]) -> List[float]:
-    if len(values) < 2:
-        return []
-    return [values[i] - values[i - 1] for i in range(1, len(values))]

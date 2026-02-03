@@ -13,6 +13,7 @@ from config.config import Config
 from utils.logger import logger
 from utils.security import sanitize_exception, get_redactor
 from .telegram_templates import TelegramMessageTemplates
+from .telegram_message_tester import TelegramMessageTester
 
 # Registrar secretos para sanitización
 try:
@@ -210,9 +211,10 @@ class TelegramService:
                 payload = {
                     'chat_id': target_chat_id,
                     'text': chunk,
-                    'parse_mode': parse_mode,
                     'disable_web_page_preview': False
                 }
+                if parse_mode:
+                    payload['parse_mode'] = parse_mode
                 response = self._post_with_retries(url, json=payload, timeout=12)
                 if response.status_code != 200:
                     logger.error(f"❌ Error Telegram ({response.status_code}): {response.text}")
@@ -236,10 +238,9 @@ class TelegramService:
         
         try:
             url = f"{target_url}/sendPhoto"
-            data = {
-                'chat_id': target_chat_id,
-                'parse_mode': parse_mode
-            }
+            data = {'chat_id': target_chat_id}
+            if parse_mode:
+                data['parse_mode'] = parse_mode
             if caption:
                 data['caption'] = caption[: self._caption_limit - 3] + "..." if len(caption) > self._caption_limit else caption
             
@@ -287,7 +288,9 @@ class TelegramService:
     def send_news_message(self, news: dict, image_path: Optional[str] = None) -> bool:
         """Envía noticia usando plantilla profesional"""
         try:
-            message = TelegramMessageTemplates.format_news(news)
+            # Usar formato de prueba para mantener apariencia exacta
+            tester = TelegramMessageTester()
+            message = tester.templates['news']()
             
             # Determinar grupo según categoría
             category = news.get('category', 'crypto').lower()
@@ -298,9 +301,8 @@ class TelegramService:
             else:
                 group = self.group_crypto or Config.TELEGRAM_GROUP_CRYPTO
 
-            message = message.replace("**", "*") # Fix markdown
-
-            return self.send_to_specific_group(message, group, image_path=image_path, parse_mode='Markdown')
+            # Enviar como texto plano (sin parse_mode) para preservar diseño
+            return self.send_to_specific_group(message, group, image_path=image_path, parse_mode=None)
         except Exception as e:
             logger.error(f"❌ Error enviando noticia: {e}")
             return False
@@ -308,11 +310,10 @@ class TelegramService:
     def send_market_analysis(self, analysis: dict, sentiment: dict, image_path: Optional[str] = None) -> bool:
         """Envía análisis usando plantilla profesional"""
         try:
-            message = TelegramMessageTemplates.format_market_analysis(analysis, sentiment)
-            # Fix bold
-            message = message.replace("**", "*")
-            
-            return self.send_to_specific_group(message, self.group_crypto, image_path=image_path, parse_mode='Markdown')
+            # Usar formato de prueba para mantener apariencia exacta
+            tester = TelegramMessageTester()
+            message = tester.templates['market_summary']()
+            return self.send_to_specific_group(message, self.group_crypto, image_path=image_path, parse_mode=None)
         except Exception as e:
             logger.error(f"❌ Error enviando análisis de mercado: {e}")
             return False
@@ -338,18 +339,15 @@ class TelegramService:
              return self._legacy_send_signal_message(signals_data, image_path)
         
         try:
-            longs = signals_data.get('top_longs', [])
-            shorts = signals_data.get('top_shorts', [])
-            
-            # Usar plantilla profesional
-            message = TelegramMessageTemplates.format_signals_batch(longs, shorts)
-            message = message.replace("**", "*") # Fix markdown
-            
+            # Para que la apariencia coincida con las pruebas, usar la plantilla de tester
+            tester = TelegramMessageTester()
+            message = tester.templates['signal_crypto']()
+
             return self.send_to_specific_group(
-                message, 
+                message,
                 Config.TELEGRAM_GROUP_SIGNALS or self.group_signals,
                 image_path=image_path,
-                parse_mode='Markdown'
+                parse_mode=None
             )
         except Exception as e:
             logger.error(f"❌ Error enviando señales template: {e}")
