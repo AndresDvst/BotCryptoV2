@@ -21,7 +21,7 @@ import os
 from datetime import datetime
 import json
 import hashlib
-from typing import Any, List
+from typing import Any, List, Optional
 
 # Registrar secretos para sanitización
 try:
@@ -37,6 +37,8 @@ class TwitterService:
         self.username = None  # Se configurará después
         self.password = None  # Se configurará después
         self.driver = None
+        self.last_status: Optional[str] = None
+        self.last_reason: Optional[str] = None
         logger.info("✅ Servicio de Twitter inicializado")
 
     def _init_driver(self):
@@ -249,12 +251,18 @@ class TwitterService:
         Publica un tweet con texto y opcionalmente una imagen. Siempre incluye texto.
         """
         try:
+            self.last_status = None
+            self.last_reason = None
             if not self.driver:
+                self.last_status = "error"
+                self.last_reason = "driver_not_initialized"
                 logger.error("❌ Driver no inicializado. Ejecuta login_twitter primero.")
                 return False
 
             if self._is_duplicate_recent(text, hours=2.0):
                 if category in ('markets', 'news', 'crypto_stable'):
+                    self.last_status = "skipped"
+                    self.last_reason = "duplicate"
                     logger.info("⏭️ Tweet duplicado en las últimas 2h, saltando publicación")
                     return False
                 else:
@@ -262,6 +270,8 @@ class TwitterService:
                     text = self._mutate_crypto_text(text)
 
             if not (text or "").strip():
+                self.last_status = "blocked"
+                self.last_reason = "empty_text"
                 logger.error("❌ Texto vacío: se bloquea publicación para evitar tweet sin texto")
                 return False
 
@@ -343,6 +353,8 @@ class TwitterService:
                 return expected[:25] in current_norm
 
             if not _set_compose_text():
+                self.last_status = "blocked"
+                self.last_reason = "compose_text"
                 logger.error("❌ No se pudo asegurar el texto en el composer antes de publicar")
                 return False
 
@@ -353,10 +365,14 @@ class TwitterService:
                     logger.info(f"📎 Imagen adjuntada: {image_path}")
                     self._human_delay(2, 3)
                 except Exception as file_err:
+                    self.last_status = "error"
+                    self.last_reason = "attach_image"
                     logger.error(f"❌ Error adjuntando imagen: {sanitize_exception(file_err)}")
                     return False
 
                 if not _set_compose_text():
+                    self.last_status = "blocked"
+                    self.last_reason = "compose_text_after_image"
                     logger.error("❌ No se pudo asegurar el texto tras adjuntar imagen")
                     return False
 
@@ -423,10 +439,14 @@ class TwitterService:
                 return False
 
             if not _set_compose_text():
+                self.last_status = "blocked"
+                self.last_reason = "compose_text_before_post"
                 logger.error("❌ No se pudo asegurar el texto justo antes de publicar")
                 return False
 
             if not _click_post_button():
+                self.last_status = "error"
+                self.last_reason = "no_post_button"
                 logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
                 return False
 
@@ -435,9 +455,12 @@ class TwitterService:
             try:
                 WebDriverWait(self.driver, 8).until(lambda d: _read_compose_text() == "")
             except Exception:
+                self.last_status = "error"
+                self.last_reason = "confirm_failed"
                 logger.error("❌ No se pudo confirmar que el tweet se publicó (composer sigue con texto)")
                 return False
 
+            self.last_status = "posted"
             logger.info("✅ Tweet publicado exitosamente")
             try:
                 self._register_tweet(text, category)
@@ -447,6 +470,8 @@ class TwitterService:
             return True
 
         except Exception as e:
+            self.last_status = "error"
+            self.last_reason = "exception"
             logger.error(f"❌ Error al publicar tweet: {sanitize_exception(e)}")
             return False
 

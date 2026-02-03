@@ -362,6 +362,8 @@ class TradingViewNewsService:
                     def send_twitter():
                         ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_url, category="news")
                         if not ok:
+                            if getattr(self.twitter, "last_reason", None) == "duplicate":
+                                return False
                             raise RuntimeError("post_tweet devolvió False")
                         return ok
                     self._retry(send_twitter)

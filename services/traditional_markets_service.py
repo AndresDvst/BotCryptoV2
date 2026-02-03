@@ -797,7 +797,10 @@ class TraditionalMarketsService:
                         logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
                         time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
                     else:
-                        logger.error("❌ Falló la publicación del Tweet de Acciones")
+                        if getattr(self.twitter, "last_reason", None) == "duplicate":
+                            logger.info("⏭️ Tweet de Acciones duplicado, saltando publicación")
+                        else:
+                            logger.error("❌ Falló la publicación del Tweet de Acciones")
                 
                 # Tweet 2: Forex (Top 7 aprox para caber)
                 if summary.get('forex'):
@@ -819,7 +822,10 @@ class TraditionalMarketsService:
                         logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
                         time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
                     else:
-                        logger.error("❌ Falló la publicación del Tweet de Forex")
+                        if getattr(self.twitter, "last_reason", None) == "duplicate":
+                            logger.info("⏭️ Tweet de Forex duplicado, saltando publicación")
+                        else:
+                            logger.error("❌ Falló la publicación del Tweet de Forex")
                 
                 # Tweet 3: Commodities
                 if summary.get('commodities'):
@@ -834,7 +840,10 @@ class TraditionalMarketsService:
                         logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
                         time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
                     else:
-                        logger.error("❌ Falló la publicación del Tweet de Commodities")
+                        if getattr(self.twitter, "last_reason", None) == "duplicate":
+                            logger.info("⏭️ Tweet de Commodities duplicado, saltando publicación")
+                        else:
+                            logger.error("❌ Falló la publicación del Tweet de Commodities")
                 
                 # Tweet 4: Bonos (NUEVO)
                 if summary.get('bonds') and len(summary['bonds']) >= 3:
@@ -854,7 +863,10 @@ class TraditionalMarketsService:
                     if ok:
                         logger.info("✅ Tweet de Bonos publicado")
                     else:
-                        logger.error("❌ Falló la publicación del Tweet de Bonos")
+                        if getattr(self.twitter, "last_reason", None) == "duplicate":
+                            logger.info("⏭️ Tweet de Bonos duplicado, saltando publicación")
+                        else:
+                            logger.error("❌ Falló la publicación del Tweet de Bonos")
                 
             except Exception as e:
                 logger.error(f"❌ Error publicando en Twitter: {e}")

@@ -493,7 +493,10 @@ class NewsService:
                 ok = self.twitter.post_tweet(tweet_text, image_path=image_path, category='news')
                 news['published_twitter'] = bool(ok)
                 if not ok:
-                    logger.error("❌ Falló la publicación en Twitter para esta noticia")
+                    if getattr(self.twitter, "last_reason", None) == "duplicate":
+                        logger.info("⏭️ Noticia duplicada en Twitter, saltando publicación")
+                    else:
+                        logger.error("❌ Falló la publicación en Twitter para esta noticia")
             
             # 2. Publicar en Telegram con routing
             if self.telegram:

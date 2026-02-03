@@ -318,7 +318,10 @@ class CryptoBotOrchestrator:
         content = "⏱ Cambios 2h - Cryptos estables:\n" + ("\n".join(lines) if lines else "Sin cambios disponibles")
         ok = self.twitter.post_tweet(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None), category="crypto_stable")
         if not ok:
-            logger.error("❌ Falló la publicación en Twitter (Cryptos estables 2h)")
+            if getattr(self.twitter, "last_reason", None) == "duplicate":
+                logger.info("⏭️ Tweet duplicado (Cryptos estables 2h), saltando publicación")
+            else:
+                logger.error("❌ Falló la publicación en Twitter (Cryptos estables 2h)")
         if self.telegram:
             self.telegram.send_crypto_message(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None))
 

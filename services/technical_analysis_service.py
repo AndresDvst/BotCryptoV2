@@ -11,7 +11,10 @@ from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import talib.abstract as ta
+try:
+    import talib.abstract as ta
+except Exception:
+    ta = None
 from utils.security import validate_dataframe
 
 from utils.logger import logger
@@ -419,26 +422,80 @@ class TechnicalAnalysisService:
         """
         validate_dataframe(df)
 
-        # ADX
-        df['adx'] = ta.ADX(df)
+        if ta is None:
+            if not getattr(self, "_ta_lib_warning_shown", False):
+                logger.warning("⚠️ TA-Lib no está disponible. Usando cálculos internos (fallback) para indicadores.")
+                self._ta_lib_warning_shown = True
 
-        # MACD
-        macd = ta.MACD(df)
-        df['macd'] = macd['macd']
-        df['macdsignal'] = macd['macdsignal']
-        df['macdhist'] = macd['macdhist']
+            close = df["close"].astype(float)
+            high = df["high"].astype(float)
+            low = df["low"].astype(float)
 
-        # RSI
-        df['rsi'] = ta.RSI(df)
+            def _ema(series: pd.Series, period: int) -> pd.Series:
+                return series.ewm(span=period, adjust=False, min_periods=period).mean()
+
+            def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
+                delta = series.diff()
+                gain = delta.clip(lower=0)
+                loss = (-delta).clip(lower=0)
+                avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+                avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+                rs = avg_gain / avg_loss.replace(0, np.nan)
+                return 100 - (100 / (1 + rs))
+
+            def _adx(high_s: pd.Series, low_s: pd.Series, close_s: pd.Series, period: int = 14) -> pd.Series:
+                prev_high = high_s.shift(1)
+                prev_low = low_s.shift(1)
+                prev_close = close_s.shift(1)
+
+                tr1 = (high_s - low_s).abs()
+                tr2 = (high_s - prev_close).abs()
+                tr3 = (low_s - prev_close).abs()
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+                up_move = high_s - prev_high
+                down_move = prev_low - low_s
+                plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+                minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+                plus_dm = pd.Series(plus_dm, index=high_s.index)
+                minus_dm = pd.Series(minus_dm, index=high_s.index)
+
+                atr = tr.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+                plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean() / atr.replace(0, np.nan))
+                minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean() / atr.replace(0, np.nan))
+
+                dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+                return dx.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+            df["adx"] = _adx(high, low, close)
+
+            ema12 = _ema(close, 12)
+            ema26 = _ema(close, 26)
+            macd_line = ema12 - ema26
+            signal = _ema(macd_line, 9)
+            hist = macd_line - signal
+            df["macd"] = macd_line
+            df["macdsignal"] = signal
+            df["macdhist"] = hist
+
+            df["rsi"] = _rsi(close, 14)
+            df["ema10"] = _ema(close, 10)
+        else:
+            df['adx'] = ta.ADX(df)
+
+            macd = ta.MACD(df)
+            df['macd'] = macd['macd']
+            df['macdsignal'] = macd['macdsignal']
+            df['macdhist'] = macd['macdhist']
+
+            df['rsi'] = ta.RSI(df)
+            df['ema10'] = ta.EMA(df, timeperiod=10)
 
         # Bandas de Bollinger
         bollinger = self.calculate_bollinger_bands(df)
         df['bb_lowerband'] = bollinger['lower']
         df['bb_middleband'] = bollinger['mid']
         df['bb_upperband'] = bollinger['upper']
-
-        # EMA
-        df['ema10'] = ta.EMA(df, timeperiod=10)
 
         return df
 
