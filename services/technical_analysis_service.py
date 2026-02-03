@@ -63,11 +63,75 @@ class TechnicalAnalysisConfig:
     BACKTEST_CACHE_TTL: int = 3600  # Cache de resultados por 1 hora
 
 
+
 class TechnicalAnalysisService:
+    def analyze_significant_coins(self, coins: list, telegram=None, twitter=None):
+        """
+        Analiza monedas con cambio >=10% (24h o 2h) y evita repetidas. Si no hay nuevas, baja el umbral a 5%.
+        Devuelve solo monedas que cumplen el criterio y no han sido reportadas recientemente.
+        """
+        results = []
+        # Primer filtro: cambio >=10%
+        filtered = [c for c in coins if (abs(c.get('change_24h', 0)) >= 10 or abs(c.get('change_2h', 0)) >= 10)]
+        nuevos = []
+        logger.info(f"🔍 Analizando monedas con cambio >= 10% (24h o 2h). Total: {len(filtered)}")
+        for coin in filtered:
+            symbol = coin.get('symbol')
+            if not symbol:
+                continue
+            # Evitar repetidas
+            if not self._is_signal_published(symbol, 'alerta'):
+                try:
+                    ohlcv = self.binance.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=200)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                    df = self.calculate_indicators(df)
+                    df = self.evaluate_signals(df)
+                    res = {
+                        "symbol": symbol,
+                        "buy": bool(df['buy_signal'].iloc[-1]) if not df.empty else False,
+                        "sell": bool(df['sell_signal'].iloc[-1]) if not df.empty else False,
+                        "rsi": float(df['rsi'].iloc[-1]) if 'rsi' in df.columns and not df.empty else None,
+                        "change_24h": coin.get('change_24h'),
+                        "change_2h": coin.get('change_2h'),
+                    }
+                    results.append(res)
+                    self._mark_signal_published(symbol, 'alerta')
+                    nuevos.append(symbol)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error analizando {symbol}: {e}")
+        # Si no hay nuevas monedas, relajar criterio a 5%
+        if not results:
+            logger.info("⚠️ No se encontraron monedas nuevas con cambio >= 10%. Relajando filtro a 5%...")
+            filtered_5 = [c for c in coins if (abs(c.get('change_24h', 0)) >= 5 or abs(c.get('change_2h', 0)) >= 5)]
+            logger.info(f"🔍 Analizando monedas con cambio >= 5% (24h o 2h). Total: {len(filtered_5)}")
+            for coin in filtered_5:
+                symbol = coin.get('symbol')
+                if not symbol or symbol in nuevos:
+                    continue
+                if not self._is_signal_published(symbol, 'alerta'):
+                    try:
+                        ohlcv = self.binance.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=200)
+                        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                        df = self.calculate_indicators(df)
+                        df = self.evaluate_signals(df)
+                        res = {
+                            "symbol": symbol,
+                            "buy": bool(df['buy_signal'].iloc[-1]) if not df.empty else False,
+                            "sell": bool(df['sell_signal'].iloc[-1]) if not df.empty else False,
+                            "rsi": float(df['rsi'].iloc[-1]) if 'rsi' in df.columns and not df.empty else None,
+                            "change_24h": coin.get('change_24h'),
+                            "change_2h": coin.get('change_2h'),
+                        }
+                        results.append(res)
+                        self._mark_signal_published(symbol, 'alerta')
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error analizando {symbol} (umbral 5%): {e}")
+        return results
+
     """Servicio para análisis técnico avanzado y gestión de riesgo"""
-    
+
     SIGNALS_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'signals_history.json')
-    
+
     def __init__(self, config: Optional[TechnicalAnalysisConfig] = None, binance_service: Optional["BinanceService"] = None):
         """Inicializa el servicio, configuración y dependencias."""
         self.config = config or TechnicalAnalysisConfig()
@@ -76,12 +140,12 @@ class TechnicalAnalysisService:
         self._htf_cache_ttl = 3600  # 1 hora
         self._backtest_cache: Dict[str, Tuple[float, float]] = {}  # {symbol: (win_rate, timestamp)}
         self.STATS_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'stats_history.json')
-        
+
         logger.info("✅ Servicio de Análisis Técnico inicializado")
-        
+
         self.images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images', 'signals')
         os.makedirs(self.images_dir, exist_ok=True)
-        
+
         self.published_signals = self._load_signals_history()
         self._reset_stats()
     
