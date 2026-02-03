@@ -8,6 +8,14 @@ if 'talib' not in sys.modules:
     sys.modules['talib'] = _types.ModuleType('talib')
     sys.modules['talib.abstract'] = _types.ModuleType('talib.abstract')
 
+if 'yfinance' not in sys.modules:
+    import types as _types
+    sys.modules['yfinance'] = _types.ModuleType('yfinance')
+
+if 'pymysql' not in sys.modules:
+    import types as _types
+    sys.modules['pymysql'] = _types.ModuleType('pymysql')
+
 # Stub minimal 'utils' module used by technical modules to avoid import-time side effects
 if 'utils' not in sys.modules:
     import types as _types
@@ -32,6 +40,7 @@ if 'utils.security' not in sys.modules:
     import types as _types
     _sec = _types.ModuleType('utils.security')
     _sec.sanitize_exception = lambda e: str(e)
+    _sec.validate_dataframe = lambda df: None
     class _Redactor:
         def register_secrets_from_config(self, cfg): pass
     _sec.get_redactor = lambda: _Redactor()

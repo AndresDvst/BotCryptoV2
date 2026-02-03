@@ -7,6 +7,7 @@ import re
 import hashlib
 import secrets
 from typing import Any, Dict, List, Optional, Set
+import pandas as pd
 from functools import lru_cache
 
 
@@ -239,6 +240,26 @@ def hash_for_dedup(content: str) -> str:
     Usa SHA-256 en lugar de MD5.
     """
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+
+def validate_dataframe(df: Any) -> None:
+    """
+    Valida un DataFrame para cálculos de indicadores técnicos.
+    """
+    if df is None:
+        raise ValueError("DataFrame vacío")
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("DataFrame inválido")
+    if df.empty:
+        raise ValueError("DataFrame vacío")
+
+    required_columns = {"open", "high", "low", "close", "volume"}
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"DataFrame sin columnas requeridas: {', '.join(sorted(missing_columns))}")
+
+    if df[list(required_columns)].isnull().any().any():
+        raise ValueError("DataFrame contiene valores nulos en columnas requeridas")
 
 
 def safe_path_join(base_path: str, *paths: str) -> Optional[str]:

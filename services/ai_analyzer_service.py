@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import google.generativeai as genai
+import google.genai as genai
 import openai
 
 from config.config import Config
@@ -31,6 +31,7 @@ class AIAnalyzerConfig:
     CACHE_TTL: int = 300
     MAX_COINS_IN_PROMPT: int = 10
     GEMINI_TEMPERATURE: float = 0.7
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     OPENAI_MODEL: str = "gpt-4o-mini"
 
 
@@ -41,7 +42,7 @@ class AIAnalyzerService:
 
         self.active_provider: Optional[str] = None
         self._cycle_provider_ok: bool = False
-        self.gemini_model: Optional[Any] = None
+        self.gemini_client: Optional[Any] = None
         self.openai_client: Optional[Any] = None
         self.openrouter_client: Optional[Any] = None
         self.openrouter_model: str = "tngtech/deepseek-r1t2-chimera:free"
@@ -63,28 +64,8 @@ class AIAnalyzerService:
         try:
             api_key = getattr(Config, "GOOGLE_GEMINI_API_KEY", "") or ""
             if api_key.strip():
-                genai.configure(api_key=api_key)
-                generation_config = {
-                    "temperature": self.config.GEMINI_TEMPERATURE,
-                    "top_p": 0.95,
-                    "top_k": 40,
-                    "max_output_tokens": 2048,
-                }
-                safety_settings = [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {
-                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-                    },
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                ]
-                self.gemini_model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash",
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                )
-                self._providers["gemini"] = self.gemini_model
+                self.gemini_client = genai.Client(api_key=api_key)
+                self._providers["gemini"] = self.gemini_client
             else:
                 logger.debug("Google Gemini API key no configurada")
         except Exception as e:
@@ -129,7 +110,7 @@ class AIAnalyzerService:
 
     def _get_provider_priority_list(self) -> List[str]:
         available: List[str] = []
-        if self.gemini_model:
+        if self.gemini_client:
             available.append("gemini")
         if self.openai_client:
             available.append("openai")
@@ -151,9 +132,18 @@ class AIAnalyzerService:
 
         def _call() -> str:
             if provider == "gemini":
-                if not self.gemini_model:
+                if not self.gemini_client:
                     raise RuntimeError("Gemini no configurado")
-                response = self.gemini_model.generate_content(prompt)
+                response = self.gemini_client.models.generate_content(
+                    model=self.config.GEMINI_MODEL,
+                    contents=prompt,
+                    config={
+                        "temperature": self.config.GEMINI_TEMPERATURE,
+                        "top_p": 0.95,
+                        "top_k": 40,
+                        "max_output_tokens": max_tokens,
+                    },
+                )
                 text = getattr(response, "text", "") or ""
                 if not text:
                     raise RuntimeError("Respuesta vacía de Gemini")
@@ -235,9 +225,18 @@ class AIAnalyzerService:
         return self._cycle_provider_ok
 
     def _test_gemini(self) -> Any:
-        if not self.gemini_model:
+        if not self.gemini_client:
             return RuntimeError("Gemini no configurado")
-        response = self.gemini_model.generate_content("Hola")
+        response = self.gemini_client.models.generate_content(
+            model=self.config.GEMINI_MODEL,
+            contents="Hola",
+            config={
+                "temperature": self.config.GEMINI_TEMPERATURE,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 32,
+            },
+        )
         if not response or not response.text:
             return RuntimeError("Respuesta vacía de Gemini")
         return True
@@ -272,7 +271,7 @@ class AIAnalyzerService:
         """Verifica qué API responde y selecciona la activa para este ciclo."""
         # 1. Probar Gemini
         try:
-            if self.gemini_model:
+            if self.gemini_client:
                 result = self._run_with_timeout(self._test_gemini, timeout_seconds=6)
                 if result is True:
                     self.active_provider = 'gemini'
