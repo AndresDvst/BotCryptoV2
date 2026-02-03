@@ -791,10 +791,13 @@ class TraditionalMarketsService:
                         else:
                             break
                     
-                    self.twitter.post_tweet(tweet1.strip(), image_path=Config.STOCKS_IMAGE_PATH, category='markets')
-                    logger.info("✅ Tweet de Acciones publicado")
-                    logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                    time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    ok = self.twitter.post_tweet(tweet1.strip(), image_path=Config.STOCKS_IMAGE_PATH, category='markets')
+                    if ok:
+                        logger.info("✅ Tweet de Acciones publicado")
+                        logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
+                        time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    else:
+                        logger.error("❌ Falló la publicación del Tweet de Acciones")
                 
                 # Tweet 2: Forex (Top 7 aprox para caber)
                 if summary.get('forex'):
@@ -810,10 +813,13 @@ class TraditionalMarketsService:
                         else:
                             break
                             
-                    self.twitter.post_tweet(tweet2.strip(), image_path=Config.FOREX_IMAGE_PATH, category='markets')
-                    logger.info("✅ Tweet de Forex publicado")
-                    logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                    time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    ok = self.twitter.post_tweet(tweet2.strip(), image_path=Config.FOREX_IMAGE_PATH, category='markets')
+                    if ok:
+                        logger.info("✅ Tweet de Forex publicado")
+                        logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
+                        time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    else:
+                        logger.error("❌ Falló la publicación del Tweet de Forex")
                 
                 # Tweet 3: Commodities
                 if summary.get('commodities'):
@@ -822,10 +828,13 @@ class TraditionalMarketsService:
                         emoji = "🟢" if commodity['change_percent'] > 0 else "🔴"
                         tweet3 += f"{emoji} {commodity['name']}: {commodity['change_percent']:+.2f}%\n"
                     
-                    self.twitter.post_tweet(tweet3.strip(), image_path=Config.COMMODITIES_IMAGE_PATH, category='markets')
-                    logger.info("✅ Tweet de Commodities publicado")
-                    logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
-                    time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    ok = self.twitter.post_tweet(tweet3.strip(), image_path=Config.COMMODITIES_IMAGE_PATH, category='markets')
+                    if ok:
+                        logger.info("✅ Tweet de Commodities publicado")
+                        logger.info("⏳ Esperando 30 segundos para la siguiente publicación...")
+                        time.sleep(getattr(Config, "TWITTER_POST_DELAY", 30))
+                    else:
+                        logger.error("❌ Falló la publicación del Tweet de Commodities")
                 
                 # Tweet 4: Bonos (NUEVO)
                 if summary.get('bonds') and len(summary['bonds']) >= 3:
@@ -841,8 +850,11 @@ class TraditionalMarketsService:
                         else:
                             break
                     
-                    self.twitter.post_tweet(tweet4.strip(), category='markets')
-                    logger.info("✅ Tweet de Bonos publicado")
+                    ok = self.twitter.post_tweet(tweet4.strip(), category='markets')
+                    if ok:
+                        logger.info("✅ Tweet de Bonos publicado")
+                    else:
+                        logger.error("❌ Falló la publicación del Tweet de Bonos")
                 
             except Exception as e:
                 logger.error(f"❌ Error publicando en Twitter: {e}")

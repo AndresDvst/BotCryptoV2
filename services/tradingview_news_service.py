@@ -359,8 +359,12 @@ class TradingViewNewsService:
                     tweet_text += f"{news['analysis'].get('summary', '')[:100]}...\n\n"
                     tweet_text += f"🔗 {news['url']}\n"
                     tweet_text += f"#Trading #News #{category}"
-                    
-                    self._retry(lambda: self.twitter.post_tweet(tweet_text[:280], image_path=image_url))
+                    def send_twitter():
+                        ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_url, category="news")
+                        if not ok:
+                            raise RuntimeError("post_tweet devolvió False")
+                        return ok
+                    self._retry(send_twitter)
                 except Exception as e:
                     logger.error(f"❌ Error publicando en Twitter: {e}")
                 

@@ -329,56 +329,58 @@ class TelegramService:
     def send_crypto_message(self, message: str, image_path: Optional[str] = None) -> bool:
         """Envía mensaje al Bot de Crypto usando formato profesional"""
         try:
-            # Usar formato de prueba para mantener apariencia exacta
-            tester = TelegramMessageTester()
-            formatted_message = tester.templates['signal_crypto']()
+            formatted_message = (message or "").strip()
+            if not formatted_message:
+                tester = TelegramMessageTester()
+                formatted_message = tester.templates['market_summary']().strip()
             
             if image_path:
                 part1, part2 = self._split_text_two_parts(formatted_message, self._caption_limit, self._text_limit)
                 if part2:
-                    sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
+                    sent = self.send_photo(image_path, caption=part1, bot_type='crypto', parse_mode=None)
                     if not sent:
                         return False
-                    return self.send_message(part2, bot_type='crypto')
-                return self.send_photo(image_path, caption=formatted_message, bot_type='crypto')
+                    return self.send_message(part2, bot_type='crypto', parse_mode=None)
+                return self.send_photo(image_path, caption=formatted_message, bot_type='crypto', parse_mode=None)
             
             part1, part2 = self._split_text_two_parts(formatted_message, self._text_limit, self._text_limit)
             if part2:
-                return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
-            return self.send_message(formatted_message, bot_type='crypto')
+                return self.send_message(part1, bot_type='crypto', parse_mode=None) and self.send_message(part2, bot_type='crypto', parse_mode=None)
+            return self.send_message(formatted_message, bot_type='crypto', parse_mode=None)
         except Exception as e:
             logger.error(f"❌ Error formateando mensaje crypto: {e}")
             # Fallback al mensaje original
             if image_path:
-                return self.send_photo(image_path, caption=message, bot_type='crypto')
-            return self.send_message(message, bot_type='crypto')
+                return self.send_photo(image_path, caption=message, bot_type='crypto', parse_mode=None)
+            return self.send_message(message, bot_type='crypto', parse_mode=None)
 
     def send_market_message(self, message: str, image_path: Optional[str] = None) -> bool:
         """Envía mensaje al Bot de Mercados usando formato profesional"""
         try:
-            # Usar formato de prueba para mantener apariencia exacta
-            tester = TelegramMessageTester()
-            formatted_message = tester.templates['signal_traditional']()
+            formatted_message = (message or "").strip()
+            if not formatted_message:
+                tester = TelegramMessageTester()
+                formatted_message = tester.templates['market_summary']().strip()
             
             if image_path:
                 part1, part2 = self._split_text_two_parts(formatted_message, self._caption_limit, self._text_limit)
                 if part2:
-                    sent = self.send_photo(image_path, caption=part1, bot_type='markets')
+                    sent = self.send_photo(image_path, caption=part1, bot_type='markets', parse_mode=None)
                     if not sent:
                         return False
-                    return self.send_message(part2, bot_type='markets')
-                return self.send_photo(image_path, caption=formatted_message, bot_type='markets')
+                    return self.send_message(part2, bot_type='markets', parse_mode=None)
+                return self.send_photo(image_path, caption=formatted_message, bot_type='markets', parse_mode=None)
             
             part1, part2 = self._split_text_two_parts(formatted_message, self._text_limit, self._text_limit)
             if part2:
-                return self.send_message(part1, bot_type='markets') and self.send_message(part2, bot_type='markets')
-            return self.send_message(formatted_message, bot_type='markets')
+                return self.send_message(part1, bot_type='markets', parse_mode=None) and self.send_message(part2, bot_type='markets', parse_mode=None)
+            return self.send_message(formatted_message, bot_type='markets', parse_mode=None)
         except Exception as e:
             logger.error(f"❌ Error formateando mensaje markets: {e}")
             # Fallback al mensaje original
             if image_path:
-                return self.send_photo(image_path, caption=message, bot_type='markets')
-            return self.send_message(message, bot_type='markets')
+                return self.send_photo(image_path, caption=message, bot_type='markets', parse_mode=None)
+            return self.send_message(message, bot_type='markets', parse_mode=None)
 
     def send_news_message(self, news: dict, image_path: Optional[str] = None) -> bool:
         """Envía noticia usando plantilla profesional"""

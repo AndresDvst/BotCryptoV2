@@ -316,7 +316,9 @@ class CryptoBotOrchestrator:
                 arrow = "📈" if ch2 >= 0 else "📉"
                 lines.append(f"{sym}{arrow} 2h:{ch2:+.1f}%")
         content = "⏱ Cambios 2h - Cryptos estables:\n" + ("\n".join(lines) if lines else "Sin cambios disponibles")
-        self.twitter.post_tweet(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None), category="crypto_stable")
+        ok = self.twitter.post_tweet(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None), category="crypto_stable")
+        if not ok:
+            logger.error("❌ Falló la publicación en Twitter (Cryptos estables 2h)")
         if self.telegram:
             self.telegram.send_crypto_message(content.strip(), image_path=getattr(Config, "REPORT_2H_IMAGE_PATH", None))
 

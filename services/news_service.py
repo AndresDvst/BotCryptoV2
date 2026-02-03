@@ -490,8 +490,10 @@ class NewsService:
             if self.twitter:
                 logger.info("📝 Publicando en Twitter...")
                 tweet_text = self._format_twitter_news(news)
-                self.twitter.post_tweet(tweet_text, image_path=image_path)
-                news['published_twitter'] = True
+                ok = self.twitter.post_tweet(tweet_text, image_path=image_path, category='news')
+                news['published_twitter'] = bool(ok)
+                if not ok:
+                    logger.error("❌ Falló la publicación en Twitter para esta noticia")
             
             # 2. Publicar en Telegram con routing
             if self.telegram:

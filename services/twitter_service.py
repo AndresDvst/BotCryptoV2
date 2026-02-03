@@ -265,95 +265,101 @@ class TwitterService:
             self.driver.get("https://x.com/home")
             self._human_delay(2, 3)
 
-            tweet_box = WebDriverWait(self.driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid=\"tweetTextarea_0\"]'))
-            )
-            tweet_box.click()
-            self._human_delay(0.5, 1)
+            def _find_compose_box():
+                selectors = [
+                    'div[data-testid="tweetTextarea_0"] div[role="textbox"]',
+                    'div[data-testid="tweetTextarea_0"]',
+                    'div[role="textbox"]',
+                ]
+                last = None
+                for sel in selectors:
+                    try:
+                        el = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, sel))
+                        )
+                        return el
+                    except Exception as err:
+                        last = err
+                raise last or RuntimeError("No se encontró el textbox de publicación")
 
-            # Insertar texto usando JavaScript para preservar emojis y disparar eventos
-            self.driver.execute_script("""
-                arguments[0].innerText = arguments[1];
-                arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
-                arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
-            """, tweet_box, text)
-            self._human_delay(1, 2)
+            def _read_compose_text():
+                box = _find_compose_box()
+                try:
+                    value = self.driver.execute_script("return arguments[0].innerText || '';", box)
+                    return (value or "").strip()
+                except Exception:
+                    return (box.text or "").strip()
 
-            # Si hay imagen, adjuntarla
+            def _set_compose_text():
+                box = _find_compose_box()
+                try:
+                    box.click()
+                except Exception:
+                    self.driver.execute_script("arguments[0].click();", box)
+                self._human_delay(0.2, 0.4)
+                self.driver.execute_script(
+                    "arguments[0].innerText = arguments[1];"
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    box,
+                    text,
+                )
+                self._human_delay(0.2, 0.4)
+                current = _read_compose_text()
+                if text.strip() and text.strip() not in current:
+                    try:
+                        box.send_keys(Keys.CONTROL, "a")
+                        box.send_keys(text)
+                        self._human_delay(0.2, 0.4)
+                    except Exception:
+                        pass
+                current = _read_compose_text()
+                return (not text.strip()) or (text.strip() in current)
+
+            if not _set_compose_text():
+                logger.error("❌ No se pudo asegurar el texto en el composer antes de publicar")
+                return False
+
             if image_path and os.path.exists(image_path):
                 try:
-                    # Encontrar el input de archivo (está oculto)
                     file_input = self.driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
                     file_input.send_keys(os.path.abspath(image_path))
                     logger.info(f"📎 Imagen adjuntada: {image_path}")
                     self._human_delay(2, 3)
-
-                    # Reinsertar texto después de adjuntar imagen (algunas versiones limpian el textarea al adjuntar)
-                    try:
-                        tweet_box = self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]')
-                        self.driver.execute_script("arguments[0].innerText = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", tweet_box, text)
-                        self._human_delay(0.5, 1)
-                    except Exception as reinser_err:
-                        logger.debug(f"⚠️ No se pudo reinsertar texto tras adjuntar imagen: {reinser_err}")
                 except Exception as file_err:
-                    logger.error(f"❌ Error adjuntando imagen: {file_err}")
-                
-                try:
-                    post_button = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[data-testid="Tweet_Button"]'))
-                    )
-                    logger.info("✅ Botón encontrado por CSS selector")
-                    post_button.click()
-                    self._human_delay(3, 4)  # Esperar más tiempo para que se procese
+                    logger.error(f"❌ Error adjuntando imagen: {sanitize_exception(file_err)}")
+                    return False
 
-                    # Verificar que el tweet fue publicado esperando a que desaparezca el textarea
+                if not _set_compose_text():
+                    logger.error("❌ No se pudo asegurar el texto tras adjuntar imagen")
+                    return False
+
+            def _click_post_button():
+                selectors = [
+                    'button[data-testid="tweetButtonInline"]',
+                    'button[data-testid="tweetButton"]',
+                    'button[data-testid="Tweet_Button"]',
+                ]
+                for sel in selectors:
                     try:
-                        WebDriverWait(self.driver, 5).until(
-                            EC.invisibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
+                        post_button = WebDriverWait(self.driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
                         )
-                        logger.info("✅ Tweet publicado exitosamente")
-                        try:
-                            self._register_tweet(text, category)
-                        except Exception:
-                            pass
-                        self._human_delay(2, 3)
+                        post_button.click()
                         return True
-                    except:
-                        logger.info("⚠️ Tweet probablemente publicado (textarea no desapareció)")
-                        return True
-                except:
-                    pass
+                    except Exception:
+                        continue
 
-                # Estrategia 2: Buscar por aria-label
                 try:
                     buttons = self.driver.find_elements(By.TAG_NAME, "button")
                     for button in buttons:
                         aria_label = button.get_attribute("aria-label") or ""
-                        if "Post" in aria_label or "Tweet" in aria_label or "Publicar" in aria_label:
-                            if button.is_displayed():
-                                logger.info(f"✅ Botón encontrado por aria-label: {aria_label}")
-                                self._human_delay(0.5, 1)
-                                button.click()
-                                self._human_delay(3, 4)
-
-                                # Verificar que se publicó
-                                try:
-                                    WebDriverWait(self.driver, 5).until(
-                                        EC.invisibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
-                                    )
-                                except:
-                                    pass
-
-                                logger.info("✅ Tweet publicado exitosamente")
-                                try:
-                                    self._register_tweet(text, category)
-                                except Exception:
-                                    pass
-                                return True
-                except:
+                        if ("Post" in aria_label or "Tweet" in aria_label or "Publicar" in aria_label) and button.is_displayed() and button.is_enabled():
+                            button.click()
+                            return True
+                except Exception:
                     pass
 
-                # Estrategia 3: Buscar por JavaScript (más confiable)
                 try:
                     logger.info("🔍 Buscando botón con JavaScript...")
                     script = """
@@ -373,60 +379,45 @@ class TwitterService:
                     if post_button:
                         logger.info("✅ Botón encontrado con JavaScript")
                         self.driver.execute_script("arguments[0].click();", post_button)
-                        self._human_delay(3, 4)
-
-                        # Verificar que se publicó
-                        try:
-                            WebDriverWait(self.driver, 5).until(
-                                EC.invisibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
-                            )
-                        except:
-                            pass
-
-                        logger.info("✅ Tweet publicado exitosamente")
-                        try:
-                            self._register_tweet(text, category)
-                        except Exception:
-                            pass
                         return True
                 except Exception as js_error:
-                    logger.warning(f"⚠️ Error con JavaScript: {js_error}")
+                    logger.warning(f"⚠️ Error con JavaScript: {sanitize_exception(js_error)}")
 
-                # Estrategia 4: Última opción - buscar visible button cerca del textarea
                 try:
-                    logger.info("🔍 Buscando botón visible cerca del textarea...")
                     textarea = self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]')
                     parent = textarea.find_element(By.XPATH, '../../..')
                     buttons = parent.find_elements(By.TAG_NAME, "button")
-
-                    # Encontrar el botón más visible/enabled
                     for button in buttons:
                         if button.is_displayed() and button.is_enabled():
                             button.click()
-                            self._human_delay(3, 4)
-
-                            # Verificar que se publicó
-                            try:
-                                WebDriverWait(self.driver, 5).until(
-                                    EC.invisibility_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
-                                )
-                            except:
-                                pass
-
-                            logger.info("✅ Tweet publicado exitosamente")
-                            try:
-                                self._register_tweet(text, category)
-                            except Exception:
-                                pass
                             return True
                 except Exception as parent_error:
-                    logger.warning(f"⚠️ Error buscando en parent: {parent_error}")
+                    logger.warning(f"⚠️ Error buscando en parent: {sanitize_exception(parent_error)}")
 
-            logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
-            return False
+                return False
 
-        except Exception as post_error:
-            logger.error(f"❌ Error al presionar botón Publicar: {post_error}")
+            if not _click_post_button():
+                logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
+                return False
+
+            self._human_delay(3, 4)
+
+            try:
+                WebDriverWait(self.driver, 8).until(lambda d: _read_compose_text() == "")
+            except Exception:
+                logger.error("❌ No se pudo confirmar que el tweet se publicó (composer sigue con texto)")
+                return False
+
+            logger.info("✅ Tweet publicado exitosamente")
+            try:
+                self._register_tweet(text, category)
+            except Exception:
+                pass
+            self._human_delay(2, 3)
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error al publicar tweet: {sanitize_exception(e)}")
             return False
 
     def close(self):
