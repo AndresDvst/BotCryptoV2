@@ -245,15 +245,7 @@ class TwitterService:
 
     def post_tweet(self, text: str, image_path: str = None, category: str = 'crypto') -> bool:
         """
-        Publica un tweet con texto y opcionalmente una imagen.
-
-        Args:
-            text: Texto del tweet (máximo 280 caracteres)
-            image_path: Ruta de la imagen a adjuntar (opcional)
-            category: Categoría de publicación ('crypto', 'markets', 'news', 'signals', 'crypto_stable')
-
-        Returns:
-            True si se publicó correctamente
+        Publica un tweet con texto y opcionalmente una imagen. Siempre incluye texto.
         """
         try:
             if not self.driver:
@@ -268,18 +260,14 @@ class TwitterService:
                     logger.info("♻️ Tweet duplicado detectado (crypto). Ajustando contenido con '2ND ANUNCIO'")
                     text = self._mutate_crypto_text(text)
 
-            logger.info("📝 Publicando tweet...")
+            logger.info(f"📝 Publicando tweet con texto: {text[:50]}{'...' if len(text)>50 else ''}")
 
-            # Ir a la página principal
             self.driver.get("https://x.com/home")
             self._human_delay(2, 3)
 
-            # Encontrar el área de texto del tweet
             tweet_box = WebDriverWait(self.driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]'))
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid=\"tweetTextarea_0\"]'))
             )
-
-            # Hacer clic en el área de texto
             tweet_box.click()
             self._human_delay(0.5, 1)
 

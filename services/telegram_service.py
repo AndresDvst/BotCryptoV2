@@ -372,34 +372,43 @@ class TelegramService:
     
     def send_report(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: List[Dict], coins_both_enriched: List[Dict]) -> bool:
         """
-        Envía un reporte completo formateado a Telegram.
-        
-        Args:
-            analysis: Análisis generado por la IA
-            market_sentiment: Datos del sentimiento del mercado
-            coins: Lista de criptomonedas analizadas
-            
-        Returns:
-            True si se envió correctamente
+        Envía un reporte completo formateado a Telegram usando plantilla profesional.
+        Si el mensaje excede el límite, lo divide en partes estéticas.
         """
         try:
-            # Crear el mensaje formateado
-            message = self._format_report(analysis, market_sentiment, coins_only_binance, coins_both_enriched)
-            
+            from services.telegram_message_tester import TelegramMessageTester
+            tester = TelegramMessageTester()
+            # Usar plantilla de resumen de mercado
+            message = tester.templates['market_summary']()
+            # Si quieres personalizar, puedes pasar datos aquí y modificar la plantilla
             image_path = Config.REPORT_24H_IMAGE_PATH or Config.REPORT_2H_IMAGE_PATH
-            if image_path:
-                part1, part2 = self._split_text_two_parts(message, self._caption_limit, self._text_limit)
-                if part2:
-                    sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
-                    if not sent:
-                        return False
-                    return self.send_message(part2, bot_type='crypto')
-                return self.send_photo(image_path, caption=message, bot_type='crypto')
-            part1, part2 = self._split_text_two_parts(message, self._text_limit, self._text_limit)
-            if part2:
-                return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
-            return self.send_message(message, bot_type='crypto')
-            
+            # Dividir el mensaje en partes estéticas si excede el límite
+            if len(message) > self._text_limit:
+                # Dividir por secciones (líneas de separación)
+                sections = message.split('━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+                parts = []
+                current = ''
+                for sec in sections:
+                    if len(current) + len(sec) + 24 < self._text_limit:
+                        current += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec
+                    else:
+                        if current:
+                            parts.append(current)
+                        current = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec
+                if current:
+                    parts.append(current)
+                # Enviar cada parte como mensaje separado
+                sent = True
+                for idx, part in enumerate(parts):
+                    if idx == 0 and image_path:
+                        sent = sent and self.send_photo(image_path, caption=part, bot_type='crypto')
+                    else:
+                        sent = sent and self.send_message(part, bot_type='crypto')
+                return sent
+            else:
+                if image_path:
+                    return self.send_photo(image_path, caption=message, bot_type='crypto')
+                return self.send_message(message, bot_type='crypto')
         except Exception as e:
             logger.error(f"❌ Error al enviar reporte: {e}")
             return False
