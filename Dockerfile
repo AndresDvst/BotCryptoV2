@@ -96,7 +96,16 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # ============================================
-# 8. Variables de entorno para Docker
+# 8. Configurar usuario no-root (Security Hardening)
+# ============================================
+RUN useradd -m appuser \
+    && chown -R appuser:appuser /app
+
+# Cambiar al usuario appuser
+USER appuser
+
+# ============================================
+# 9. Variables de entorno para Docker
 # ============================================
 ENV DISPLAY=:99
 ENV CHROME_BINARY_PATH=/usr/bin/google-chrome
