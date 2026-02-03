@@ -10,7 +10,14 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import yfinance as yf
+# Import opcional de yfinance (puede fallar en Python 3.14)
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"⚠️ yfinance no disponible: {e}")
+    yf = None
+    YFINANCE_AVAILABLE = False
 
 from utils.logger import logger
 from config.config import Config
@@ -166,6 +173,10 @@ class TraditionalMarketsService:
         Returns:
             Lista con precios actuales de bonos
         """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("⚠️ yfinance no disponible, omitiendo precios de bonos")
+            return []
+            
         bonds = getattr(Config, "BONDS", {})
         if not bonds:
             logger.warning("⚠️ No hay bonos configurados")
@@ -233,6 +244,10 @@ class TraditionalMarketsService:
         Returns:
             Lista de diccionarios con información de acciones.
         """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("⚠️ yfinance no disponible, omitiendo análisis de acciones")
+            return []
+            
         default_symbols = getattr(Config, "STOCK_SYMBOLS_DEFAULT", [])
         extended_symbols = getattr(Config, "STOCK_SYMBOLS_EXTENDED", [])
         symbols_to_use = symbols or default_symbols or extended_symbols
@@ -310,6 +325,10 @@ class TraditionalMarketsService:
         Returns:
             Lista de diccionarios con la info de los pares
         """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("⚠️ yfinance no disponible, omitiendo análisis de forex")
+            return []
+            
         pairs = getattr(Config, "FOREX_PAIRS", [])
         logger.info(f"💱 Analizando {len(pairs)} pares de divisas...")
         all_movers = []
@@ -357,6 +376,10 @@ class TraditionalMarketsService:
         Returns:
             Lista con precios actuales de commodities
         """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("⚠️ yfinance no disponible, omitiendo precios de commodities")
+            return []
+            
         commodities = getattr(Config, "COMMODITIES", {})
         logger.info(f"🛢️ Obteniendo precios de {len(commodities)} commodities...")
         

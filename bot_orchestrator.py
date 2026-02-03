@@ -9,7 +9,16 @@ from services.market_sentiment_service import MarketSentimentService
 from services.ai_analyzer_service import AIAnalyzerService
 from services.telegram_service import TelegramService
 from services.twitter_service import TwitterService
-from services.traditional_markets_service import TraditionalMarketsService
+
+from utils.logger import logger
+
+# Import opcional para traditional_markets_service (puede fallar en Python 3.14)
+try:
+    from services.traditional_markets_service import TraditionalMarketsService
+except Exception as e:
+    logger.warning(f"⚠️ No se pudo importar TraditionalMarketsService: {e}")
+    TraditionalMarketsService = None
+
 from services.technical_analysis_service import TechnicalAnalysisService
 from services.price_monitor_service import PriceMonitorService
 from services.tradingview_news_service import TradingViewNewsService
@@ -116,7 +125,10 @@ class CryptoBotOrchestrator:
         self._init_service("twitter", TwitterService, critical=False)
         self._init_service("db", MySQLManager, critical=False)
         self._init_service("technical_analysis", TechnicalAnalysisService, critical=False)
-        self._init_service("traditional_markets", lambda: TraditionalMarketsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
+        if TraditionalMarketsService is not None:
+            self._init_service("traditional_markets", lambda: TraditionalMarketsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
+        else:
+            logger.info("ℹ️ TraditionalMarketsService no disponible (compatibilidad Python 3.14)")
         self._init_service("price_monitor", lambda: PriceMonitorService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter")), critical=False)
         self._init_service("news_service", lambda: NewsService(self._services.get("db"), self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
         self._init_service("tradingview_news", lambda: TradingViewNewsService(self._services.get("telegram"), self._services.get("twitter"), self._services.get("ai_analyzer")), critical=False)
