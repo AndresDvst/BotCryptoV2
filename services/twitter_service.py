@@ -21,6 +21,7 @@ import os
 from datetime import datetime
 import json
 import hashlib
+from typing import Any, List
 
 # Registrar secretos para sanitización
 try:
@@ -260,32 +261,38 @@ class TwitterService:
                     logger.info("♻️ Tweet duplicado detectado (crypto). Ajustando contenido con '2ND ANUNCIO'")
                     text = self._mutate_crypto_text(text)
 
+            if not (text or "").strip():
+                logger.error("❌ Texto vacío: se bloquea publicación para evitar tweet sin texto")
+                return False
+
             logger.info(f"📝 Publicando tweet con texto: {text[:50]}{'...' if len(text)>50 else ''}")
 
             self.driver.get("https://x.com/home")
             self._human_delay(2, 3)
 
             def _find_compose_box():
+                candidates: List[Any] = []
                 selectors = [
-                    'div[data-testid="tweetTextarea_0"] div[role="textbox"]',
-                    'div[data-testid="tweetTextarea_0"]',
-                    'div[role="textbox"]',
+                    'div[data-testid^="tweetTextarea_"] div[role="textbox"]',
+                    'div[data-testid^="tweetTextarea_"]',
                 ]
-                last = None
                 for sel in selectors:
                     try:
-                        el = WebDriverWait(self.driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, sel))
+                        WebDriverWait(self.driver, 10).until(
+                            lambda d: len(d.find_elements(By.CSS_SELECTOR, sel)) > 0
                         )
-                        return el
-                    except Exception as err:
-                        last = err
-                raise last or RuntimeError("No se encontró el textbox de publicación")
+                        candidates = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                        candidates = [c for c in candidates if c.is_displayed()]
+                        if candidates:
+                            return candidates[0]
+                    except Exception:
+                        continue
+                raise RuntimeError("No se encontró el textbox de publicación")
 
             def _read_compose_text():
                 box = _find_compose_box()
                 try:
-                    value = self.driver.execute_script("return arguments[0].innerText || '';", box)
+                    value = self.driver.execute_script("return (arguments[0].innerText || arguments[0].textContent || '');", box)
                     return (value or "").strip()
                 except Exception:
                     return (box.text or "").strip()
@@ -297,24 +304,43 @@ class TwitterService:
                 except Exception:
                     self.driver.execute_script("arguments[0].click();", box)
                 self._human_delay(0.2, 0.4)
-                self.driver.execute_script(
-                    "arguments[0].innerText = arguments[1];"
-                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
-                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                    box,
-                    text,
-                )
+                try:
+                    box.send_keys(Keys.CONTROL, "a")
+                    box.send_keys(Keys.BACKSPACE)
+                    self._human_delay(0.1, 0.2)
+                    box.send_keys(text)
+                except Exception:
+                    pass
+                self._human_delay(0.2, 0.4)
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                        box,
+                    )
+                except Exception:
+                    pass
                 self._human_delay(0.2, 0.4)
                 current = _read_compose_text()
-                if text.strip() and text.strip() not in current:
-                    try:
-                        box.send_keys(Keys.CONTROL, "a")
-                        box.send_keys(text)
-                        self._human_delay(0.2, 0.4)
-                    except Exception:
-                        pass
+                if not text.strip():
+                    return True
+                expected = " ".join(text.strip().split())
+                current_norm = " ".join((current or "").split())
+                if expected and expected[:25] and expected[:25] in current_norm:
+                    return True
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].innerText = arguments[1];"
+                        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                        box,
+                        text,
+                    )
+                except Exception:
+                    pass
                 current = _read_compose_text()
-                return (not text.strip()) or (text.strip() in current)
+                current_norm = " ".join((current or "").split())
+                return expected[:25] in current_norm
 
             if not _set_compose_text():
                 logger.error("❌ No se pudo asegurar el texto en el composer antes de publicar")
@@ -394,6 +420,10 @@ class TwitterService:
                 except Exception as parent_error:
                     logger.warning(f"⚠️ Error buscando en parent: {sanitize_exception(parent_error)}")
 
+                return False
+
+            if not _set_compose_text():
+                logger.error("❌ No se pudo asegurar el texto justo antes de publicar")
                 return False
 
             if not _click_post_button():
