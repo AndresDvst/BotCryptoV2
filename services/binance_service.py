@@ -222,15 +222,26 @@ class BinanceService:
         """Limpia entradas expiradas del caché."""
         now = time.time()
         keys_to_delete: List[str] = []
+        
+        # Limpiar entradas expiradas
         for key, (_, timestamp) in self._cache.items():
             ttl = self._cache_ttl.get(key)
             if ttl is None:
+                keys_to_delete.append(key)  # Eliminar entradas sin TTL
                 continue
             if now - timestamp > ttl:
                 keys_to_delete.append(key)
-        for key in keys_to_delete:
+        
+        # Limpiar también entradas del TTL dict
+        for key in list(self._cache_ttl.keys()):
+            if key not in self._cache:
+                keys_to_delete.append(key)
+        
+        # Eliminar todas las entradas expiradas
+        for key in set(keys_to_delete):  # Usar set para evitar duplicados
             self._cache.pop(key, None)
             self._cache_ttl.pop(key, None)
+            logger.debug(f"🗑️ Eliminada entrada expirada del caché: {key}")
 
     def get_all_tickers(self, force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
         """

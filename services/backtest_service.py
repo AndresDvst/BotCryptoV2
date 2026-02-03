@@ -61,15 +61,19 @@ class BacktestService:
     
     @property
     def binance(self):
-        """Lazy loading de BinanceService."""
+        """Lazy loading de BinanceService con manejo seguro de imports."""
         if self._binance is None:
             try:
+                # Importación diferida para evitar circular imports
                 from services.binance_service import BinanceService
                 self._binance = BinanceService()
                 logger.info("✅ BinanceService inicializado para Backtesting")
+            except ImportError as e:
+                logger.error(f"❌ Error de importación de BinanceService: {e}")
+                raise RuntimeError("No se pudo importar BinanceService. Verifique las dependencias.") from e
             except Exception as e:
                 logger.error(f"❌ Error inicializando BinanceService: {e}")
-                raise
+                raise RuntimeError(f"Error inicializando BinanceService: {e}") from e
         return self._binance
     
     def _fetch_historical_candles(
@@ -215,9 +219,14 @@ class BacktestService:
         losing = [t for t in trades if t.pnl <= 0]
         win_rate = (len(winning) / len(trades) * 100) if trades else 0
         
-        gross_profit = sum(t.pnl for t in winning) if winning else 0
-        gross_loss = abs(sum(t.pnl for t in losing)) if losing else 0
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
+        gross_profit = sum(t.pnl for t in winning) if winning else 0.0
+        gross_loss = abs(sum(t.pnl for t in losing)) if losing else 0.0
+        
+        # Evitar división por cero con manejo seguro
+        if gross_loss > 1e-10:  # Usar tolerancia para valores muy pequeños
+            profit_factor = gross_profit / gross_loss
+        else:
+            profit_factor = float('inf') if gross_profit > 0 else 1.0
         
         avg_pnl = sum(t.pnl for t in trades) / len(trades) if trades else 0
         best_trade = max((t.return_pct for t in trades), default=0)
@@ -242,7 +251,7 @@ class BacktestService:
             winning_trades=len(winning),
             losing_trades=len(losing),
             win_rate=win_rate,
-            profit_factor=profit_factor if profit_factor != float('inf') else 999.99,
+            profit_factor=min(profit_factor, 1000.0) if profit_factor != float('inf') else 1000.0,
             max_drawdown_pct=metrics.max_drawdown * 100 if hasattr(metrics, 'max_drawdown') else 0,
             sharpe_ratio=metrics.sharpe_ratio if hasattr(metrics, 'sharpe_ratio') else 0,
             avg_trade_pnl=avg_pnl,

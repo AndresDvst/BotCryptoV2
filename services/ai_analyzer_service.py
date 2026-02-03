@@ -20,7 +20,7 @@ from config.config import Config
 from utils.logger import logger
 
 
-warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+# warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 
 
 @dataclass
