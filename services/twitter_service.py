@@ -287,14 +287,17 @@ class TwitterService:
                     file_input.send_keys(os.path.abspath(image_path))
                     logger.info(f"📎 Imagen adjuntada: {image_path}")
                     self._human_delay(2, 3)
-                except Exception as img_error:
-                    logger.warning(f"⚠️ No se pudo adjuntar imagen: {img_error}")
 
-            # Presionar el botón Publicar automáticamente
-            try:
-                self._human_delay(1, 2)
-
-                # Estrategia 1: Buscar por CSS selector
+                    # Reinsertar texto después de adjuntar imagen (algunas versiones limpian el textarea al adjuntar)
+                    try:
+                        tweet_box = self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]')
+                        self.driver.execute_script("arguments[0].innerText = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", tweet_box, text)
+                        self._human_delay(0.5, 1)
+                    except Exception as reinser_err:
+                        logger.debug(f"⚠️ No se pudo reinsertar texto tras adjuntar imagen: {reinser_err}")
+                except Exception as file_err:
+                    logger.error(f"❌ Error adjuntando imagen: {file_err}")
+                
                 try:
                     post_button = WebDriverWait(self.driver, 5).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[data-testid="Tweet_Button"]'))
@@ -419,15 +422,11 @@ class TwitterService:
                 except Exception as parent_error:
                     logger.warning(f"⚠️ Error buscando en parent: {parent_error}")
 
-                logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
-                return False
+            logger.error("❌ No se encontró el botón Publicar con ninguna estrategia")
+            return False
 
-            except Exception as post_error:
-                logger.error(f"❌ Error al presionar botón Publicar: {post_error}")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Error al publicar tweet: {e}")
+        except Exception as post_error:
+            logger.error(f"❌ Error al presionar botón Publicar: {post_error}")
             return False
 
     def close(self):

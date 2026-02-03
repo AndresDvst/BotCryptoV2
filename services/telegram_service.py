@@ -126,31 +126,93 @@ class TelegramService:
         return self._session.post(url, json=json, data=data, files=files, timeout=timeout)
 
     def _split_text_by_lines(self, text: str, limit: int) -> List[str]:
+        """Divide texto manteniendo la estructura visual con líneas dobles"""
         lines = text.splitlines(keepends=True)
         chunks: List[str] = []
         current = ""
+        
         for line in lines:
-            if len(current) + len(line) <= limit:
-                current += line
-            else:
+            # Si agregar esta línea excede el límite, guardar chunk actual
+            if len(current) + len(line) > limit:
                 if current:
                     chunks.append(current)
-                current = line
+                    current = ""
+                
+                # Si una línea individual es demasiado larga, dividirla
+                if len(line) > limit:
+                    # Dividir línea larga manteniendo palabras completas
+                    words = line.split()
+                    temp_line = ""
+                    for word in words:
+                        if len(temp_line) + len(word) + 1 <= limit:
+                            temp_line += word + " "
+                        else:
+                            if temp_line:
+                                chunks.append(temp_line.strip())
+                            temp_line = word + " "
+                    if temp_line:
+                        current = temp_line.strip() + "\n"
+                else:
+                    current = line
+            else:
+                current += line
+        
         if current:
             chunks.append(current)
+        
         return chunks
 
     def _split_text_two_parts(self, text: str, first_limit: int, second_limit: int) -> Tuple[str, str]:
+        """Divide texto en dos partes manteniendo formato profesional"""
         if len(text) <= first_limit:
             return text, ""
-        prefix1 = "1/2 "
-        prefix2 = "2/2 "
-        first_chunks = self._split_text_by_lines(text, first_limit - len(prefix1))
-        part1 = (prefix1 + first_chunks[0].rstrip()) if first_chunks else prefix1
-        remaining_text = "".join(first_chunks[1:]).lstrip("\n") if first_chunks else text
-        remaining_chunks = self._split_text_by_lines(remaining_text, second_limit - len(prefix2))
-        part2_base = remaining_chunks[0].rstrip() if remaining_chunks else remaining_text[: max(0, second_limit - len(prefix2))]
-        part2 = prefix2 + part2_base if part2_base else ""
+        
+        # Buscar punto natural de división (línea doble o sección)
+        lines = text.splitlines(keepends=True)
+        
+        # Intentar dividir en secciones naturales
+        split_points = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith("━━━━━━━━━━━━━━━━━━━━━━━━━━━━"):
+                split_points.append(i)
+            elif line.strip().startswith("╔═══════════════════════════"):
+                split_points.append(i)
+        
+        # Si encontramos puntos de división naturales
+        if len(split_points) >= 2:
+            # Dividir después del primer punto medio
+            mid_point = len(split_points) // 2
+            split_index = split_points[mid_point]
+            part1 = "".join(lines[:split_index])
+            part2 = "".join(lines[split_index:])
+            
+            # Asegurar que no excedan límites
+            if len(part1) <= first_limit and len(part2) <= second_limit:
+                return part1, part2
+        
+        # División por líneas si no hay puntos naturales
+        prefix1 = "📋 1/2 📋\n\n"
+        prefix2 = "📋 2/2 📋\n\n"
+        
+        # Dividir aproximadamente a la mitad
+        approx_half = len(text) // 2
+        split_pos = text.rfind("\n", 0, approx_half)
+        
+        if split_pos == -1 or split_pos < len(text) // 3:
+            split_pos = approx_half
+        
+        part1 = text[:split_pos].rstrip()
+        part2 = text[split_pos:].lstrip("\n")
+        
+        # Aplicar prefijos y ajustar límites
+        part1 = prefix1 + part1
+        part2 = prefix2 + part2
+        
+        # Si aún exceden límites, usar división por líneas
+        if len(part1) > first_limit or len(part2) > second_limit:
+            part1 = prefix1 + text[:first_limit - len(prefix1)]
+            part2 = prefix2 + text[first_limit - len(prefix1):second_limit - len(prefix2)]
+        
         return part1, part2
 
     def _resolve_chat_id(self, parse_mode: str = "HTML", bot_type: str = 'crypto') -> Optional[str]:
@@ -265,25 +327,58 @@ class TelegramService:
             return True
 
     def send_crypto_message(self, message: str, image_path: Optional[str] = None) -> bool:
-        """Envía mensaje al Bot de Crypto"""
-        if image_path:
-            part1, part2 = self._split_text_two_parts(message, self._caption_limit, self._text_limit)
+        """Envía mensaje al Bot de Crypto usando formato profesional"""
+        try:
+            # Usar formato de prueba para mantener apariencia exacta
+            tester = TelegramMessageTester()
+            formatted_message = tester.templates['signal_crypto']()
+            
+            if image_path:
+                part1, part2 = self._split_text_two_parts(formatted_message, self._caption_limit, self._text_limit)
+                if part2:
+                    sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
+                    if not sent:
+                        return False
+                    return self.send_message(part2, bot_type='crypto')
+                return self.send_photo(image_path, caption=formatted_message, bot_type='crypto')
+            
+            part1, part2 = self._split_text_two_parts(formatted_message, self._text_limit, self._text_limit)
             if part2:
-                sent = self.send_photo(image_path, caption=part1, bot_type='crypto')
-                if not sent:
-                    return False
-                return self.send_message(part2, bot_type='crypto')
-            return self.send_photo(image_path, caption=message, bot_type='crypto')
-        part1, part2 = self._split_text_two_parts(message, self._text_limit, self._text_limit)
-        if part2:
-            return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
-        return self.send_message(message, bot_type='crypto')
+                return self.send_message(part1, bot_type='crypto') and self.send_message(part2, bot_type='crypto')
+            return self.send_message(formatted_message, bot_type='crypto')
+        except Exception as e:
+            logger.error(f"❌ Error formateando mensaje crypto: {e}")
+            # Fallback al mensaje original
+            if image_path:
+                return self.send_photo(image_path, caption=message, bot_type='crypto')
+            return self.send_message(message, bot_type='crypto')
 
     def send_market_message(self, message: str, image_path: Optional[str] = None) -> bool:
-        """Envía mensaje al Bot de Mercados"""
-        if image_path:
-            return self.send_photo(image_path, caption=message, bot_type='markets')
-        return self.send_message(message, bot_type='markets')
+        """Envía mensaje al Bot de Mercados usando formato profesional"""
+        try:
+            # Usar formato de prueba para mantener apariencia exacta
+            tester = TelegramMessageTester()
+            formatted_message = tester.templates['signal_traditional']()
+            
+            if image_path:
+                part1, part2 = self._split_text_two_parts(formatted_message, self._caption_limit, self._text_limit)
+                if part2:
+                    sent = self.send_photo(image_path, caption=part1, bot_type='markets')
+                    if not sent:
+                        return False
+                    return self.send_message(part2, bot_type='markets')
+                return self.send_photo(image_path, caption=formatted_message, bot_type='markets')
+            
+            part1, part2 = self._split_text_two_parts(formatted_message, self._text_limit, self._text_limit)
+            if part2:
+                return self.send_message(part1, bot_type='markets') and self.send_message(part2, bot_type='markets')
+            return self.send_message(formatted_message, bot_type='markets')
+        except Exception as e:
+            logger.error(f"❌ Error formateando mensaje markets: {e}")
+            # Fallback al mensaje original
+            if image_path:
+                return self.send_photo(image_path, caption=message, bot_type='markets')
+            return self.send_message(message, bot_type='markets')
 
     def send_news_message(self, news: dict, image_path: Optional[str] = None) -> bool:
         """Envía noticia usando plantilla profesional"""
@@ -376,28 +471,27 @@ class TelegramService:
         Si el mensaje excede el límite, lo divide en partes estéticas.
         """
         try:
-            from services.telegram_message_tester import TelegramMessageTester
-            tester = TelegramMessageTester()
-            # Usar plantilla de resumen de mercado
-            message = tester.templates['market_summary']()
-            # Si quieres personalizar, puedes pasar datos aquí y modificar la plantilla
+            # Generar mensaje dinámico usando _format_report
+            message = self._format_report(analysis, market_sentiment, coins_only_binance, coins_both_enriched)
             image_path = Config.REPORT_24H_IMAGE_PATH or Config.REPORT_2H_IMAGE_PATH
-            # Dividir el mensaje en partes estéticas si excede el límite
+
+            # Dividir por secciones estéticas si excede el límite de texto
             if len(message) > self._text_limit:
-                # Dividir por secciones (líneas de separación)
                 sections = message.split('━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
                 parts = []
                 current = ''
                 for sec in sections:
-                    if len(current) + len(sec) + 24 < self._text_limit:
-                        current += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec
+                    # Añadir separador de vuelta para mantener estética
+                    chunk = ('━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec).strip()
+                    if len(current) + len(chunk) + 1 < self._text_limit:
+                        current = (current + '\n' + chunk).strip()
                     else:
                         if current:
                             parts.append(current)
-                        current = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec
+                        current = chunk
                 if current:
                     parts.append(current)
-                # Enviar cada parte como mensaje separado
+
                 sent = True
                 for idx, part in enumerate(parts):
                     if idx == 0 and image_path:
@@ -405,10 +499,11 @@ class TelegramService:
                     else:
                         sent = sent and self.send_message(part, bot_type='crypto')
                 return sent
-            else:
-                if image_path:
-                    return self.send_photo(image_path, caption=message, bot_type='crypto')
-                return self.send_message(message, bot_type='crypto')
+
+            # Si no excede límite
+            if image_path:
+                return self.send_photo(image_path, caption=message, bot_type='crypto')
+            return self.send_message(message, bot_type='crypto')
         except Exception as e:
             logger.error(f"❌ Error al enviar reporte: {e}")
             return False
