@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from bot_orchestrator import CryptoBotOrchestrator
 from config.config import Config
 from utils.logger import logger
+from utils.browser_utils import BrowserManager
 from services.telegram_message_tester import TelegramMessageTester
 
 class BotManager:
@@ -311,6 +312,13 @@ def main():
                 MenuOption('12', '⏰ Modo Espera Inteligente (Monitoreo + Noticias + Ciclo 2h)', '⏰', lambda m: run_smart_wait_mode(m)),
                 MenuOption('13', '🧪 Backtesting (Probar estrategias con datos históricos)', '🧪', lambda m: m.get_bot().backtest.interactive_backtest() if m.get_bot().backtest else print("❌ Servicio de backtest no disponible")),
                 MenuOption('14', '📝 Prueba de Mensajes Telegram (Formato)', '📝', lambda m: m.get_message_tester().show_menu()),
+                MenuOption('15', '🐦 Iniciar sesión en Twitter (Manual)', '🐦', lambda m: (
+                    BrowserManager.open_manual_login("https://x.com/home"),
+                    input("\nCuando termines de iniciar sesión y cierres Chrome, presiona ENTER para volver al menú...")
+                )),
+                MenuOption('16', '🧪 Prueba de Publicación en Twitter', '🧪', lambda m: subprocess.run([sys.executable, "tests/test_twitter.py"], cwd=os.getcwd())),
+                MenuOption('17', '🐦 Prueba de Engagement en Twitter (Likes + Comments)', '🐦', lambda m: subprocess.run([sys.executable, "tests/test_twitter_engagement.py"], cwd=os.getcwd())),
+                MenuOption('18', '🤖 Prueba de Conexión IA (HuggingFace/OpenRouter/Gemini)', '🤖', lambda m: subprocess.run([sys.executable, "tests/test_ai_connection.py"], cwd=os.getcwd())),
             ]
             for opt in options:
                 print(f"{opt.number}. {opt.label}")

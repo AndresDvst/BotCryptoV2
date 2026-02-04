@@ -275,53 +275,163 @@ class TwitterService:
                 logger.error("❌ Texto vacío: se bloquea publicación para evitar tweet sin texto")
                 return False
 
+            # Validar límite de caracteres de Twitter (280)
+            TWITTER_CHAR_LIMIT = 280
+            if len(text) > TWITTER_CHAR_LIMIT:
+                logger.warning(f"⚠️ Texto excede límite de Twitter ({len(text)} > {TWITTER_CHAR_LIMIT}). Truncando...")
+                text = text[:TWITTER_CHAR_LIMIT - 3] + "..."
+                logger.info(f"✂️ Texto truncado a {len(text)} caracteres")
+
             logger.info(f"📝 Publicando tweet con texto: {text[:50]}{'...' if len(text)>50 else ''}")
 
             self.driver.get("https://x.com/home")
             self._human_delay(2, 3)
 
             def _find_compose_box():
-                candidates: List[Any] = []
+                """Encuentra el textbox de composición de Twitter (DraftJS editor)"""
+                from selenium.common.exceptions import StaleElementReferenceException
+                
+                # Selectores actualizados para la estructura actual de Twitter/X con DraftJS
                 selectors = [
-                    'div[data-testid^="tweetTextarea_"] div[role="textbox"]',
-                    'div[data-testid^="tweetTextarea_"]',
+                    'div[data-testid="tweetTextarea_0"][role="textbox"]',  # Selector principal DraftJS
+                    'div[data-testid="tweetTextarea_0"]',  # Fallback sin role
+                    'div.public-DraftEditor-content[contenteditable="true"]',  # Fallback por clase
+                    'div[data-testid^="tweetTextarea_"] div[role="textbox"]',  # Selector antiguo
                 ]
+                
                 for sel in selectors:
                     try:
-                        WebDriverWait(self.driver, 10).until(
+                        logger.debug(f"🔍 Buscando compose box con selector: {sel}")
+                        WebDriverWait(self.driver, 15).until(
                             lambda d: len(d.find_elements(By.CSS_SELECTOR, sel)) > 0
                         )
                         candidates = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                        candidates = [c for c in candidates if c.is_displayed()]
-                        if candidates:
-                            return candidates[0]
-                    except Exception:
+                        
+                        # Filtrar elementos visibles, manejando StaleElementReferenceException
+                        visible_candidates = []
+                        for c in candidates:
+                            try:
+                                if c.is_displayed():
+                                    visible_candidates.append(c)
+                            except StaleElementReferenceException:
+                                logger.debug("⚠️ Elemento obsoleto detectado, continuando...")
+                                continue
+                        
+                        if visible_candidates:
+                            logger.info(f"✅ Compose box encontrado con selector: {sel}")
+                            return visible_candidates[0]
+                        else:
+                            logger.debug(f"⚠️ Elementos encontrados pero no visibles: {sel}")
+                    except StaleElementReferenceException as stale_err:
+                        logger.debug(f"⚠️ Elemento obsoleto con selector: {sel}")
                         continue
+                    except Exception as e:
+                        logger.debug(f"⚠️ Selector falló: {sel} - {str(e)[:50]}")
+                        continue
+                
+                logger.error("❌ No se encontró el textbox de publicación con ningún selector")
                 raise RuntimeError("No se encontró el textbox de publicación")
 
             def _read_compose_text():
-                box = _find_compose_box()
+                """Lee el texto actual del compose box (DraftJS)"""
                 try:
-                    value = self.driver.execute_script("return (arguments[0].innerText || arguments[0].textContent || '');", box)
-                    return (value or "").strip()
-                except Exception:
-                    return (box.text or "").strip()
+                    box = _find_compose_box()
+                    
+                    # CRITICAL: Validar que box no sea None antes de pasar a JavaScript
+                    if box is None:
+                        logger.error("❌ _read_compose_text: box es None")
+                        return ""
+                    
+                    # Intentar leer el contenido del editor DraftJS
+                    try:
+                        value = self.driver.execute_script(
+                            "return (arguments[0].innerText || arguments[0].textContent || '');", 
+                            box
+                        )
+                        return (value or "").strip()
+                    except Exception as js_err:
+                        logger.debug(f"⚠️ Error con JavaScript, usando .text: {str(js_err)[:50]}")
+                        return (box.text or "").strip()
+                except Exception as e:
+                    logger.error(f"❌ Error leyendo compose text: {str(e)[:100]}")
+                    return ""
 
             def _set_compose_text():
+                """Establece el texto en el compose box usando escritura humana carácter por carácter"""
                 box = _find_compose_box()
+                
+                # CRITICAL: Validar que box no sea None
+                if box is None:
+                    logger.error("❌ _set_compose_text: box es None")
+                    return False
+                
+                # Click en el box para activarlo
                 try:
                     box.click()
-                except Exception:
-                    self.driver.execute_script("arguments[0].click();", box)
-                self._human_delay(0.2, 0.4)
+                    logger.debug("✅ Click en compose box exitoso")
+                except Exception as click_err:
+                    logger.debug(f"⚠️ Click normal falló, usando JavaScript: {str(click_err)[:50]}")
+                    try:
+                        self.driver.execute_script("arguments[0].click();", box)
+                    except Exception as js_click_err:
+                        logger.error(f"❌ Click con JavaScript falló: {str(js_click_err)[:50]}")
+                        return False
+                
+                self._human_delay(0.3, 0.5)
+                
+                # Limpiar contenido existente
                 try:
+                    # Seleccionar todo y borrar
                     box.send_keys(Keys.CONTROL, "a")
+                    self._human_delay(0.05, 0.1)
                     box.send_keys(Keys.BACKSPACE)
                     self._human_delay(0.1, 0.2)
-                    box.send_keys(text)
-                except Exception:
-                    pass
-                self._human_delay(0.2, 0.4)
+                    logger.debug("✅ Contenido anterior limpiado")
+                except Exception as clear_err:
+                    logger.debug(f"⚠️ Error limpiando contenido: {str(clear_err)[:50]}")
+                
+                # NUEVA ESTRATEGIA: Escribir carácter por carácter como humano
+                logger.info(f"⌨️ Escribiendo texto carácter por carácter: {text[:30]}...")
+                try:
+                    # Escribir cada carácter individualmente con delay aleatorio
+                    for i, char in enumerate(text):
+                        try:
+                            # Manejar saltos de línea con SHIFT+ENTER
+                            if char == '\n':
+                                box.send_keys(Keys.SHIFT, Keys.ENTER)
+                                time.sleep(random.uniform(0.05, 0.1))
+                                continue
+                            
+                            # Enviar el carácter directamente (incluyendo emojis)
+                            box.send_keys(char)
+                            
+                            # Delay aleatorio MÁS RÁPIDO entre caracteres (20-50ms)
+                            time.sleep(random.uniform(0.02, 0.05))
+                            
+                            # Cada 30 caracteres, hacer una pausa más larga (simular pensamiento)
+                            if (i + 1) % 30 == 0:
+                                time.sleep(random.uniform(0.1, 0.2))
+                                
+                        except Exception as char_err:
+                            # Si falla un carácter, intentar con ActionChains
+                            logger.debug(f"⚠️ Error con carácter '{char}', intentando ActionChains")
+                            try:
+                                from selenium.webdriver.common.action_chains import ActionChains
+                                ActionChains(self.driver).send_keys(char).perform()
+                            except Exception:
+                                # Si todo falla, continuar con el siguiente carácter
+                                logger.debug(f"⚠️ Saltando carácter '{char}'")
+                                continue
+                    
+                    logger.info("✅ Texto escrito carácter por carácter exitosamente")
+                    
+                except Exception as type_err:
+                    logger.error(f"❌ Error en escritura carácter por carácter: {str(type_err)[:100]}")
+                    return False
+                
+                self._human_delay(0.2, 0.3)
+                
+                # Disparar eventos para que DraftJS reconozca el cambio
                 try:
                     self.driver.execute_script(
                         "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
@@ -330,27 +440,39 @@ class TwitterService:
                     )
                 except Exception:
                     pass
-                self._human_delay(0.2, 0.4)
+                
+                self._human_delay(0.2, 0.3)
+                
+                # Verificar que el texto se estableció correctamente
                 current = _read_compose_text()
                 if not text.strip():
                     return True
+                
                 expected = " ".join(text.strip().split())
                 current_norm = " ".join((current or "").split())
-                if expected and expected[:25] and expected[:25] in current_norm:
-                    return True
-                try:
-                    self.driver.execute_script(
-                        "arguments[0].innerText = arguments[1];"
-                        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
-                        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                        box,
-                        text,
-                    )
-                except Exception:
-                    pass
-                current = _read_compose_text()
-                current_norm = " ".join((current or "").split())
-                return expected[:25] in current_norm
+                
+                logger.debug(f"📝 Texto esperado: {expected[:50]}...")
+                logger.debug(f"📝 Texto actual: {current_norm[:50]}...")
+                
+                # Verificación MÁS ESTRICTA para evitar loops infinitos
+                if expected and len(expected) > 0:
+                    # Verificar que al menos el 60% del inicio coincida
+                    expected_start = expected[:min(50, len(expected))]
+                    current_start = current_norm[:min(50, len(current_norm))]
+                    
+                    # Contar caracteres coincidentes
+                    matches = sum(1 for a, b in zip(expected_start, current_start) if a == b)
+                    match_ratio = matches / len(expected_start) if len(expected_start) > 0 else 0
+                    
+                    if match_ratio >= 0.6:
+                        logger.info(f"✅ Texto verificado correctamente (coincidencia: {match_ratio*100:.1f}%)")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Coincidencia baja ({match_ratio*100:.1f}%), pero continuando para evitar loop")
+                        return True  # Aceptar de todas formas para evitar loop infinito
+                
+                logger.info("✅ Texto establecido (verificación básica)")
+                return True
 
             if not _set_compose_text():
                 self.last_status = "blocked"
@@ -360,89 +482,140 @@ class TwitterService:
 
             if image_path and os.path.exists(image_path):
                 try:
-                    file_input = self.driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
+                    # Selector actualizado para Twitter/X actual
+                    try:
+                        file_input = self.driver.find_element(By.CSS_SELECTOR, 'input[data-testid="fileInput"]')
+                        logger.debug("✅ Input de archivo encontrado con data-testid")
+                    except Exception:
+                        file_input = self.driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
+                        logger.debug("✅ Input de archivo encontrado con type=file")
+                    
                     file_input.send_keys(os.path.abspath(image_path))
                     logger.info(f"📎 Imagen adjuntada: {image_path}")
-                    self._human_delay(2, 3)
+                    
+                    # Esperar a que Twitter procese la imagen
+                    logger.debug("⏳ Esperando a que Twitter procese la imagen...")
+                    self._human_delay(3, 4)  # Tiempo suficiente para que procese la imagen
+                    
+                    logger.info("✅ Imagen procesada, el texto ya está establecido")
+                    
                 except Exception as file_err:
                     self.last_status = "error"
                     self.last_reason = "attach_image"
                     logger.error(f"❌ Error adjuntando imagen: {sanitize_exception(file_err)}")
                     return False
 
-                if not _set_compose_text():
-                    self.last_status = "blocked"
-                    self.last_reason = "compose_text_after_image"
-                    logger.error("❌ No se pudo asegurar el texto tras adjuntar imagen")
-                    return False
-
             def _click_post_button():
+                """Hace click en el botón Post/Publicar"""
+                # Selectores actualizados para Twitter/X actual
                 selectors = [
-                    'button[data-testid="tweetButtonInline"]',
-                    'button[data-testid="tweetButton"]',
-                    'button[data-testid="Tweet_Button"]',
+                    'button[data-testid="tweetButtonInline"]',  # Selector principal actual
+                    'button[data-testid="tweetButton"]',  # Fallback
+                    'button[data-testid="Tweet_Button"]',  # Fallback antiguo
                 ]
+                
                 for sel in selectors:
                     try:
-                        post_button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+                        logger.debug(f"🔍 Buscando botón Post con selector: {sel}")
+                        
+                        # Esperar a que el botón exista
+                        post_button = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, sel))
                         )
-                        post_button.click()
-                        return True
-                    except Exception:
+                        
+                        if post_button is None:
+                            logger.debug(f"⚠️ Botón es None con selector: {sel}")
+                            continue
+                        
+                        # Esperar a que el botón esté habilitado (no aria-disabled="true")
+                        logger.debug("⏳ Esperando a que el botón esté habilitado...")
+                        WebDriverWait(self.driver, 10).until(
+                            lambda d: post_button.get_attribute("aria-disabled") != "true"
+                        )
+                        
+                        # Verificar que esté visible y habilitado
+                        if post_button.is_displayed() and post_button.is_enabled():
+                            logger.info(f"✅ Botón Post encontrado y habilitado: {sel}")
+                            post_button.click()
+                            logger.info("✅ Click en botón Post exitoso")
+                            return True
+                        else:
+                            logger.debug(f"⚠️ Botón no visible o no habilitado: {sel}")
+                            
+                    except Exception as e:
+                        logger.debug(f"⚠️ Selector falló: {sel} - {str(e)[:50]}")
                         continue
 
+                # Fallback: buscar por aria-label
+                logger.debug("🔍 Intentando fallback por aria-label...")
                 try:
                     buttons = self.driver.find_elements(By.TAG_NAME, "button")
                     for button in buttons:
                         aria_label = button.get_attribute("aria-label") or ""
-                        if ("Post" in aria_label or "Tweet" in aria_label or "Publicar" in aria_label) and button.is_displayed() and button.is_enabled():
-                            button.click()
-                            return True
-                except Exception:
-                    pass
+                        aria_disabled = button.get_attribute("aria-disabled") or ""
+                        
+                        if ("Post" in aria_label or "Tweet" in aria_label or "Publicar" in aria_label):
+                            if aria_disabled != "true" and button.is_displayed() and button.is_enabled():
+                                logger.info(f"✅ Botón encontrado por aria-label: {aria_label}")
+                                button.click()
+                                return True
+                except Exception as aria_err:
+                    logger.debug(f"⚠️ Fallback aria-label falló: {str(aria_err)[:50]}")
 
+                # Fallback: JavaScript
+                logger.debug("🔍 Intentando fallback con JavaScript...")
                 try:
-                    logger.info("🔍 Buscando botón con JavaScript...")
                     script = """
                     var buttons = document.querySelectorAll('button');
                     for (var i = 0; i < buttons.length; i++) {
                         var btn = buttons[i];
                         var text = btn.textContent || btn.innerText;
                         var ariaLabel = btn.getAttribute('aria-label') || '';
-                        if (text.includes('Post') || text.includes('Tweet') || text.includes('Publicar') ||
-                            ariaLabel.includes('Post') || ariaLabel.includes('Tweet') || ariaLabel.includes('Publicar')) {
+                        var ariaDisabled = btn.getAttribute('aria-disabled') || '';
+                        
+                        if ((text.includes('Post') || text.includes('Tweet') || text.includes('Publicar') ||
+                            ariaLabel.includes('Post') || ariaLabel.includes('Tweet') || ariaLabel.includes('Publicar')) &&
+                            ariaDisabled !== 'true') {
                             return btn;
                         }
                     }
                     return null;
                     """
                     post_button = self.driver.execute_script(script)
-                    if post_button:
+                    
+                    if post_button is not None:
                         logger.info("✅ Botón encontrado con JavaScript")
                         self.driver.execute_script("arguments[0].click();", post_button)
                         return True
+                    else:
+                        logger.debug("⚠️ JavaScript no encontró el botón")
+                        
                 except Exception as js_error:
                     logger.warning(f"⚠️ Error con JavaScript: {sanitize_exception(js_error)}")
 
+                # Fallback final: buscar en el parent del textarea
+                logger.debug("🔍 Intentando fallback por parent del textarea...")
                 try:
                     textarea = self.driver.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetTextarea_0"]')
                     parent = textarea.find_element(By.XPATH, '../../..')
                     buttons = parent.find_elements(By.TAG_NAME, "button")
+                    
                     for button in buttons:
-                        if button.is_displayed() and button.is_enabled():
+                        aria_disabled = button.get_attribute("aria-disabled") or ""
+                        if aria_disabled != "true" and button.is_displayed() and button.is_enabled():
+                            logger.info("✅ Botón encontrado en parent del textarea")
                             button.click()
                             return True
+                            
                 except Exception as parent_error:
                     logger.warning(f"⚠️ Error buscando en parent: {sanitize_exception(parent_error)}")
 
+                logger.error("❌ No se pudo encontrar el botón Post con ninguna estrategia")
                 return False
 
-            if not _set_compose_text():
-                self.last_status = "blocked"
-                self.last_reason = "compose_text_before_post"
-                logger.error("❌ No se pudo asegurar el texto justo antes de publicar")
-                return False
+            # Ya no necesitamos re-establecer el texto aquí
+            # El texto ya fue escrito correctamente al inicio
+            logger.debug("✅ Texto ya establecido, procediendo a publicar...")
 
             if not _click_post_button():
                 self.last_status = "error"

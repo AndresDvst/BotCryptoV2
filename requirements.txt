@@ -27,3 +27,7 @@ Flask>=3.0.0
 
 # Database
 pymysql>=1.1.0
+
+# AI Provider Expansion
+huggingface_hub>=0.28.0
+

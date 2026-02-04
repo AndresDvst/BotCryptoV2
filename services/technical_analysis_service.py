@@ -535,3 +535,100 @@ class TechnicalAnalysisService:
 
         return df
 
+
+    def run_technical_analysis(self, capital: float, risk_percent: float, telegram=None, twitter=None):
+        """
+        Ejecuta análisis técnico completo para las monedas principales.
+        Método wrapper para compatibilidad con main.py.
+        """
+        logger.info("🎯 Ejecutando Análisis Técnico con Señales...")
+        
+        # 1. Definir lista de monedas a analizar (Top + LTC)
+        # Puedes mover esto a Config si prefieres
+        target_coins = [
+            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 
+            'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LTC/USDT', 'DOT/USDT',
+            'LINK/USDT', 'MATIC/USDT', 'TRX/USDT', 'SHIB/USDT', 'UNI/USDT'
+        ]
+        
+        results = []
+        
+        for symbol in target_coins:
+            try:
+                # Obtener datos históricos (4h o 1d para swing trading)
+                # FIX: Usar self.binance en lugar de self.binance_service
+                if not self.binance:
+                    logger.error("❌ BinanceService no disponible")
+                    return
+
+                # Nota: get_historical_data podría llamarse fetch_ohlcv_dataframe en otros servicios,
+                # verificar si get_historical_data existe en BinanceService. 
+                # Asumiremos que si, sino se ajustará.
+                # Si falla, podemos usar self.binance.exchange.fetch_ohlcv directamente como en analyze_significant_coins
+                
+                try:
+                    df = self.binance.get_historical_data(symbol, interval='4h', limit=100)
+                except AttributeError:
+                    # Fallback si get_historical_data no existe
+                    ohlcv = self.binance.exchange.fetch_ohlcv(symbol, timeframe='4h', limit=100)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                
+                if df is None or df.empty:
+                    logger.warning(f"⚠️ No hay datos para {symbol}")
+                    continue
+                
+                # Calcular indicadores
+                df = self.calculate_indicators(df)
+                
+                # Evaluar señales
+                df = self.evaluate_signals(df)
+                
+                # Extraer señal del último candle
+                last_candle = df.iloc[-1]
+                signal = None
+                if last_candle.get('buy_signal'):
+                    signal = 'BUY'
+                elif last_candle.get('sell_signal'):
+                    signal = 'SELL'
+                
+                if signal:
+                    # Calcular tamaño de posición
+                    entry_price = float(df['close'].iloc[-1])
+                    stop_loss = float(df['low'].iloc[-1]) * 0.98  # Ejemplo simple
+                    
+                    # Validar señal con backtest rápido
+                    is_valid, win_rate, _ = self._validate_with_backtest(symbol)
+                    
+                    if is_valid:
+                        results.append({
+                            'symbol': symbol,
+                            'signal': signal,
+                            'price': entry_price,
+                            'confidence': win_rate,
+                            'stop_loss': stop_loss
+                        })
+                        
+            except Exception as e:
+                logger.error(f"❌ Error analizando {symbol}: {e}")
+                
+        # Publicar resultados
+        if results:
+            logger.info(f"✅ Se encontraron {len(results)} señales potenciales")
+            # Aquí podrías llamar al servicio de Telegram para enviar las señales
+            # Por ahora lo dejamos en log
+            for res in results:
+                logger.info(f"🚀 Señal: {res['symbol']} {res['signal']} (Conf: {res['confidence']}%)")
+                
+            # Si se pasó el objeto telegram, intentar enviar
+            if telegram:
+                try:
+                    # Verificar si existe el método antes de llamar
+                    if hasattr(telegram, 'send_signals_report'):
+                        telegram.send_signals_report(results)
+                    else:
+                        logger.warning("⚠️ El objeto Telegram no tiene método send_signals_report")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error enviando a Telegram: {e}")
+        else:
+            logger.info("ℹ️ No se encontraron señales de alta probabilidad en este ciclo.")
+

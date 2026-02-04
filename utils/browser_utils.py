@@ -156,6 +156,15 @@ class BrowserManager:
                     pass
 
             driver = webdriver.Chrome(service=service, options=options)
+
+            # --- Anti-deteccion CDP (CRITICO para Twitter) ---
+            try:
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": """Object.defineProperty(navigator, "webdriver", {get: () => undefined});"""
+                })
+                logger.debug("Anti-deteccion CDP configurada")
+            except Exception as e:
+                logger.warning(f"No se pudo configurar anti-deteccion CDP: {e}")
             return driver
 
         except Exception as e:

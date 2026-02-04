@@ -84,6 +84,27 @@ class DatabaseManager:
                     ON coin_data(analysis_id)
                 """)
                 
+                # Tabla para tracking de engagement en Twitter
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS twitter_engagement (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tweet_id TEXT UNIQUE NOT NULL,
+                        action TEXT NOT NULL,
+                        comment_text TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_engagement_tweet 
+                    ON twitter_engagement(tweet_id)
+                """)
+                
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_engagement_action 
+                    ON twitter_engagement(action)
+                """)
+                
                 conn.commit()
             finally:
                 conn.close()
@@ -318,5 +339,39 @@ class DatabaseManager:
                 logger.error(f"❌ Error limpiando base de datos: {e}")
                 conn.rollback()
                 return False
+            finally:
+                conn.close()
+    
+    def execute_query(self, query: str, params: tuple = ()) -> Optional[List]:
+        """
+        Ejecuta una query SQL personalizada (thread-safe)
+        
+        Args:
+            query: Query SQL a ejecutar
+            params: Parámetros para la query
+            
+        Returns:
+            Resultados de la query o None
+        """
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute(query, params)
+                
+                # Si es INSERT/UPDATE/DELETE, hacer commit
+                if query.strip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
+                    conn.commit()
+                    return None
+                
+                # Si es SELECT, retornar resultados
+                results = cursor.fetchall()
+                return results
+                
+            except Exception as e:
+                logger.error(f"❌ Error ejecutando query: {e}")
+                conn.rollback()
+                return None
             finally:
                 conn.close()

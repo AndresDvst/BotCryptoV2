@@ -231,7 +231,11 @@ class TelegramService:
         footer = "\n".join(footer_lines)
         return f"{sep}\n{title}\n{sep}\n\n{content}\n\n{sep}\n{footer}\n{sep}"
 
-    def _format_crypto_report_plain(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: List[Dict], coins_both_enriched: List[Dict]) -> str:
+    def _format_crypto_report_plain(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: List[Dict], coins_both_enriched: List[Dict]) -> Tuple[str, str]:
+        """
+        Formatea el reporte de crypto en DOS mensajes separados.
+        Retorna: (mensaje_1_24h, mensaje_2_2h)
+        """
         sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         emoji = market_sentiment.get('sentiment_emoji', '📊')
         fear_greed = market_sentiment.get('fear_greed_index', {})
@@ -244,64 +248,75 @@ class TelegramService:
         coins_up_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) and coin.get('change_2h', 0) > 0]
         coins_down_2h = [coin for coin in coins_both_enriched if coin.get('change_2h', 0) and coin.get('change_2h', 0) < 0]
 
-        lines: List[str] = []
-        lines.append(f"{emoji} Sentimiento: {sentiment}")
-        lines.append(f"📊 Fear & Greed: {fg_value}/100 ({fg_class})")
-
-        lines.append("")
-        lines.append(sep)
-        lines.append("📈 TOP SUBIDAS 24H (>10%)")
-        lines.append(sep)
+        # ============================================================
+        # MENSAJE 1/2: TOP 24H
+        # ============================================================
+        lines_msg1: List[str] = []
+        lines_msg1.append("📊 1/2 - REPORTE CRIPTO")
+        lines_msg1.append("")
+        lines_msg1.append(f"{emoji} Sentimiento: {sentiment}")
+        lines_msg1.append(f"📊 Fear & Greed: {fg_value}/100 ({fg_class})")
+        lines_msg1.append("")
+        lines_msg1.append(sep)
+        lines_msg1.append("📈 TOP SUBIDAS 24H (>10%)")
+        lines_msg1.append(sep)
         if coins_up:
             for coin in coins_up[:10]:
                 sym = str(coin.get('symbol', 'N/A')).replace('/USDT', '')
                 chg = float(coin.get('change_24h', 0) or 0)
                 price = coin.get('price', None)
                 if price is None:
-                    lines.append(f"🟢 {sym}: {chg:+.2f}%")
+                    lines_msg1.append(f"🟢 {sym}: {chg:+.2f}%")
                 else:
-                    lines.append(f"🟢 {sym}: {chg:+.2f}% (${float(price):.4f})")
+                    lines_msg1.append(f"🟢 {sym}: {chg:+.2f}% (${float(price):.4f})")
         else:
-            lines.append("Sin subidas destacadas")
+            lines_msg1.append("Sin subidas destacadas")
 
-        lines.append("")
-        lines.append(sep)
-        lines.append("📉 TOP BAJADAS 24H (<-10%)")
-        lines.append(sep)
+        lines_msg1.append("")
+        lines_msg1.append(sep)
+        lines_msg1.append("📉 TOP BAJADAS 24H (<-10%)")
+        lines_msg1.append(sep)
         if coins_down:
             for coin in coins_down[:10]:
                 sym = str(coin.get('symbol', 'N/A')).replace('/USDT', '')
                 chg = float(coin.get('change_24h', 0) or 0)
                 price = coin.get('price', None)
                 if price is None:
-                    lines.append(f"🔴 {sym}: {chg:+.2f}%")
+                    lines_msg1.append(f"🔴 {sym}: {chg:+.2f}%")
                 else:
-                    lines.append(f"🔴 {sym}: {chg:+.2f}% (${float(price):.4f})")
+                    lines_msg1.append(f"🔴 {sym}: {chg:+.2f}% (${float(price):.4f})")
         else:
-            lines.append("Sin bajadas destacadas")
+            lines_msg1.append("Sin bajadas destacadas")
 
-        lines.append("")
-        lines.append(sep)
-        lines.append("⏱ MOVIMIENTOS 2H (BINANCE)")
-        lines.append(sep)
+        # ============================================================
+        # MENSAJE 2/2: MOVIMIENTOS 2H + RESUMEN IA
+        # ============================================================
+        lines_msg2: List[str] = []
+        lines_msg2.append("📊 2/2 - REPORTE CRIPTO")
+        lines_msg2.append("")
+        lines_msg2.append(sep)
+        lines_msg2.append("⏱ MOVIMIENTOS 2H (BINANCE)")
+        lines_msg2.append(sep)
         if coins_up_2h:
-            lines.append("📈 Subidas:")
+            lines_msg2.append("📈 Subidas:")
             for coin in coins_up_2h[:10]:
                 sym = str(coin.get('symbol', 'N/A')).replace('/USDT', '')
                 chg = float(coin.get('change_2h', 0) or 0)
-                lines.append(f"🟢 {sym}: {chg:+.2f}%")
+                lines_msg2.append(f"🟢 {sym}: {chg:+.2f}%")
         else:
-            lines.append("📈 Subidas: Sin datos")
-        lines.append("")
+            lines_msg2.append("📈 Subidas: Sin datos")
+        
+        lines_msg2.append("")
         if coins_down_2h:
-            lines.append("📉 Bajadas:")
+            lines_msg2.append("📉 Bajadas:")
             for coin in coins_down_2h[:10]:
                 sym = str(coin.get('symbol', 'N/A')).replace('/USDT', '')
                 chg = float(coin.get('change_2h', 0) or 0)
-                lines.append(f"🔴 {sym}: {chg:+.2f}%")
+                lines_msg2.append(f"🔴 {sym}: {chg:+.2f}%")
         else:
-            lines.append("📉 Bajadas: Sin datos")
+            lines_msg2.append("📉 Bajadas: Sin datos")
 
+        # Agregar resumen IA si existe
         top_buys = analysis.get('top_buys', []) if isinstance(analysis, dict) else []
         top_sells = analysis.get('top_sells', []) if isinstance(analysis, dict) else []
         confidence = None
@@ -309,30 +324,56 @@ class TelegramService:
             confidence = analysis.get("confidence_level", None) or analysis.get("confidence", None)
 
         if top_buys or top_sells:
-            lines.append("")
-            lines.append(sep)
-            lines.append("🤖 RESUMEN IA")
-            lines.append(sep)
+            lines_msg2.append("")
+            lines_msg2.append(sep)
+            lines_msg2.append("🤖 RESUMEN IA")
+            lines_msg2.append(sep)
             if top_buys:
-                lines.append("🟢 Top compras:")
+                lines_msg2.append("🟢 Top compras:")
                 for item in top_buys[:3]:
                     sym = item.get('symbol', 'N/A')
                     reason = (item.get('reason', '') or '').strip()
-                    lines.append(f"• {sym} — {reason}" if reason else f"• {sym}")
+                    lines_msg2.append(f"• {sym} — {reason}" if reason else f"• {sym}")
             if top_sells:
-                lines.append("")
-                lines.append("🔴 Top ventas:")
+                lines_msg2.append("")
+                lines_msg2.append("🔴 Top ventas:")
                 for item in top_sells[:3]:
                     sym = item.get('symbol', 'N/A')
                     reason = (item.get('reason', '') or '').strip()
-                    lines.append(f"• {sym} — {reason}" if reason else f"• {sym}")
+                    lines_msg2.append(f"• {sym} — {reason}" if reason else f"• {sym}")
 
-        body = "\n".join(lines).strip()
-        try:
-            conf_pct = int(confidence) if confidence is not None else None
-        except Exception:
-            conf_pct = None
-        return self._wrap_report_template("🚀 REPORTE CRIPTO", body, confidence=conf_pct)
+        # Agregar confianza al mensaje 2
+        if confidence is not None:
+            try:
+                conf_pct = int(confidence)
+                lines_msg2.append("")
+                lines_msg2.append(f"🔥 Confianza: {conf_pct}%")
+            except Exception:
+                pass
+
+        # Agregar recomendación de la IA si existe
+        ai_recommendation = None
+        if isinstance(analysis, dict):
+            ai_recommendation = analysis.get("recommendation", None) or analysis.get("summary", None)
+        
+        if ai_recommendation:
+            lines_msg2.append("")
+            lines_msg2.append("💡 Recomendación IA:")
+            lines_msg2.append(str(ai_recommendation))
+
+        # Agregar disclaimer
+        lines_msg2.append("")
+        lines_msg2.append("⚠️ Disclaimer: Este análisis es solo informativo y no constituye asesoramiento financiero.")
+
+        # Agregar timestamp al mensaje 2
+        ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+        lines_msg2.append("")
+        lines_msg2.append(f"⏰ {ts}")
+
+        message_1 = "\n".join(lines_msg1).strip()
+        message_2 = "\n".join(lines_msg2).strip()
+        
+        return (message_1, message_2)
 
     def _resolve_chat_id(self, parse_mode: str = "HTML", bot_type: str = 'crypto') -> Optional[str]:
         """
@@ -409,6 +450,14 @@ class TelegramService:
         if not image_path or not os.path.exists(image_path):
             logger.warning(f"⚠️ Imagen no encontrada: {image_path}")
             return False
+        
+        # Validar que el archivo no esté vacío (evitar error 400 file must be non-empty)
+        try:
+            if os.path.getsize(image_path) == 0:
+                logger.error(f"❌ Error: La imagen {image_path} tiene 0 bytes (vacía).")
+                return False
+        except Exception:
+            pass
         
         target_url = self._get_target_url(bot_type)
         target_chat_id = chat_id or self._resolve_chat_id(parse_mode, bot_type)
@@ -594,42 +643,46 @@ class TelegramService:
     
     def send_report(self, analysis: Dict, market_sentiment: Dict, coins_only_binance: List[Dict], coins_both_enriched: List[Dict]) -> bool:
         """
-        Envía un reporte completo formateado a Telegram usando plantilla profesional.
-        Si el mensaje excede el límite, lo divide en partes estéticas.
+        Envía un reporte completo formateado a Telegram en DOS mensajes separados.
+        Mensaje 1/2: TOP 24H (con imagen si existe)
+        Mensaje 2/2: MOVIMIENTOS 2H + RESUMEN IA
         """
         try:
-            message = self._format_crypto_report_plain(analysis, market_sentiment, coins_only_binance, coins_both_enriched)
+            # Obtener los dos mensajes
+            message_1, message_2 = self._format_crypto_report_plain(analysis, market_sentiment, coins_only_binance, coins_both_enriched)
             image_path = Config.REPORT_24H_IMAGE_PATH or Config.REPORT_2H_IMAGE_PATH
 
-            # Dividir por secciones estéticas si excede el límite de texto
-            if len(message) > self._text_limit:
-                sections = message.split('━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-                parts = []
-                current = ''
-                for sec in sections:
-                    # Añadir separador de vuelta para mantener estética
-                    chunk = ('━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + sec).strip()
-                    if len(current) + len(chunk) + 1 < self._text_limit:
-                        current = (current + '\n' + chunk).strip()
-                    else:
-                        if current:
-                            parts.append(current)
-                        current = chunk
-                if current:
-                    parts.append(current)
+            # Enviar mensaje 1/2 (TOP 24H) con imagen si existe
+            if image_path and os.path.exists(image_path):
+                # Si el mensaje 1 excede el límite de caption, enviar imagen sin caption y luego el texto
+                if len(message_1) > self._caption_limit:
+                    sent_1 = self.send_photo(image_path, caption="📊 1/2 - REPORTE CRIPTO", bot_type='crypto', parse_mode=None)
+                    if not sent_1:
+                        logger.error("❌ Error enviando imagen del mensaje 1/2")
+                        return False
+                    sent_1 = self.send_message(message_1, bot_type='crypto', parse_mode=None)
+                else:
+                    sent_1 = self.send_photo(image_path, caption=message_1, bot_type='crypto', parse_mode=None)
+            else:
+                sent_1 = self.send_message(message_1, bot_type='crypto', parse_mode=None)
 
-                sent = True
-                for idx, part in enumerate(parts):
-                    if idx == 0 and image_path:
-                        sent = sent and self.send_photo(image_path, caption=part, bot_type='crypto', parse_mode=None)
-                    else:
-                        sent = sent and self.send_message(part, bot_type='crypto', parse_mode=None)
-                return sent
+            if not sent_1:
+                logger.error("❌ Error enviando mensaje 1/2")
+                return False
 
-            # Si no excede límite
-            if image_path:
-                return self.send_photo(image_path, caption=message, bot_type='crypto', parse_mode=None)
-            return self.send_message(message, bot_type='crypto', parse_mode=None)
+            # Pequeña pausa entre mensajes para mantener orden
+            time.sleep(1)
+
+            # Enviar mensaje 2/2 (MOVIMIENTOS 2H + RESUMEN IA)
+            sent_2 = self.send_message(message_2, bot_type='crypto', parse_mode=None)
+            
+            if not sent_2:
+                logger.error("❌ Error enviando mensaje 2/2")
+                return False
+
+            logger.info("✅ Reporte enviado exitosamente en 2 mensajes")
+            return True
+
         except Exception as e:
             logger.error(f"❌ Error al enviar reporte: {e}")
             return False

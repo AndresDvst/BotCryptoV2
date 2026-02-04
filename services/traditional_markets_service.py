@@ -228,7 +228,7 @@ class TraditionalMarketsService:
         symbols: Optional[List[str]] = None,
         use_cache: bool = True,
         ttl: int = 300,
-        min_change_percent: float = 2.0,
+        min_change_percent: float = 1.0,
         limit: int = 10,
     ) -> List[Dict]:
         """
@@ -431,7 +431,7 @@ class TraditionalMarketsService:
         summary = {
             'timestamp': datetime.now(),
             'is_weekend': self.is_weekend(),
-            'stocks': self.get_top_stocks(min_change_percent=2.0, limit=10),
+            'stocks': self.get_top_stocks(min_change_percent=1.0, limit=10),
             'forex': self.get_forex_movers(min_change_percent=0.5, limit=10),
             'commodities': self.get_commodity_prices(),
         }
@@ -699,7 +699,7 @@ class TraditionalMarketsService:
 
     def _log_market_summary(self, summary):
         """Helper para loguear resumen"""
-        logger.info("\n📈 ACCIONES (Top Movers > 2.0%):")
+        logger.info("\n📈 ACCIONES (Top Movers > 1.0%):")
         if summary.get('stocks'):
             for stock in summary['stocks']:
                 emoji = "🟢" if stock['change_percent'] > 0 else "🔴"

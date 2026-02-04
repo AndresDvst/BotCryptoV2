@@ -1,5 +1,5 @@
 """
-Servicio de análisis con IA utilizando múltiples proveedores (Gemini, OpenAI, OpenRouter).
+Servicio de análisis con IA utilizando múltiples proveedores (Gemini, OpenRouter).
 Analiza los datos del mercado y genera recomendaciones.
 """
 
@@ -14,10 +14,19 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import google.genai as genai
-import openai
+import openai  # Solo para OpenRouter
+import requests
 
+# ✅ Importar logger PRIMERO
 from config.config import Config
 from utils.logger import logger
+
+# ✅ Luego intentar import opcional
+try:
+    from huggingface_hub import InferenceClient
+except ImportError:
+    InferenceClient = None
+    logger.warning("⚠️ 'huggingface_hub' no instalado. El proveedor Hugging Face estará deshabilitado. Ejecute: pip install huggingface_hub")
 
 
 # warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
@@ -31,8 +40,20 @@ class AIAnalyzerConfig:
     CACHE_TTL: int = 300
     MAX_COINS_IN_PROMPT: int = 10
     GEMINI_TEMPERATURE: float = 0.7
-    GEMINI_MODEL: str = "gemini-2.5-flash"
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    GEMINI_MODEL: Optional[str] = None
+
+    OPENROUTER_MODEL_DISCOVERY_LIMIT: int = 30
+
+    HF_MODEL_DISCOVERY_REFRESH_SECONDS: int = 6 * 60 * 60
+    HF_MODEL_DISCOVERY_LIMIT: int = 50
+    HF_MODEL_DISCOVERY_TIMEOUT_SECONDS: int = 10
+    HF_MAX_BILLIONS: float = 34.0
+    HF_VALIDATE_MAX_CANDIDATES: int = 25
+    HF_VALIDATE_TARGET_MODELS: int = 12
+    HF_VALIDATE_TIMEOUT_SECONDS: int = 12
+    
+    def __post_init__(self):
+        pass
 
 
 class AIAnalyzerService:
@@ -43,9 +64,15 @@ class AIAnalyzerService:
         self.active_provider: Optional[str] = None
         self._cycle_provider_ok: bool = False
         self.gemini_client: Optional[Any] = None
-        self.openai_client: Optional[Any] = None
         self.openrouter_client: Optional[Any] = None
-        self.openrouter_model: str = "tngtech/deepseek-r1t2-chimera:free"
+        self.openrouter_models: List[str] = []
+        self.current_openrouter_model_index: int = 0
+        self._openrouter_api_key: Optional[str] = None
+        
+        self.huggingface_api_key: Optional[str] = None
+        self.huggingface_models: List[str] = []
+        self._hf_model_task: Dict[str, str] = {}
+        self._hf_models_last_refresh_ts: float = 0.0
 
         self._providers: Dict[str, Any] = {}
 
@@ -61,40 +88,278 @@ class AIAnalyzerService:
         self._timeout: int = self.config.DEFAULT_TIMEOUT
         self._cache_ttl: int = self.config.CACHE_TTL
 
+        # Configurar Gemini
         try:
             api_key = getattr(Config, "GOOGLE_GEMINI_API_KEY", "") or ""
             if api_key.strip():
                 self.gemini_client = genai.Client(api_key=api_key)
                 self._providers["gemini"] = self.gemini_client
+                if self.config.GEMINI_MODEL:
+                    logger.debug(f"✅ Gemini configurado (modelo fijo={self.config.GEMINI_MODEL})")
+                else:
+                    logger.debug("✅ Gemini configurado (modelo dinámico)")
             else:
                 logger.debug("Google Gemini API key no configurada")
         except Exception as e:
-            logger.debug("Error al configurar Gemini")
+            logger.debug(f"Error al configurar Gemini: {e}")
 
-        try:
-            api_key = getattr(Config, "OPENAI_API_KEY", "") or ""
-            if api_key.strip():
-                self.openai_client = openai.OpenAI(api_key=api_key)
-                self._providers["openai"] = self.openai_client
-            else:
-                logger.debug("OpenAI API key no configurada")
-        except Exception as e:
-            logger.debug("Error al configurar OpenAI")
-
+        # Configurar OpenRouter (6 modelos gratuitos)
         try:
             api_key = getattr(Config, "OPENROUTER_API_KEY", "") or ""
             if api_key.strip():
+                self._openrouter_api_key = api_key
                 self.openrouter_client = openai.OpenAI(
                     api_key=api_key,
                     base_url="https://openrouter.ai/api/v1",
                 )
                 self._providers["openrouter"] = self.openrouter_client
+                logger.debug("✅ OpenRouter configurado (modelos dinámicos)")
             else:
                 logger.debug("OpenRouter API key no configurada")
         except Exception as e:
-            logger.debug("Error al configurar OpenRouter")
+            logger.debug(f"Error al configurar OpenRouter: {e}")
+
+        # Configurar Hugging Face
+        try:
+            api_key = getattr(Config, "HUGGINGFACE_API_KEY", "") or ""
+            if api_key.strip():
+                self.huggingface_api_key = api_key
+                self._providers["huggingface"] = "inference_client"
+                logger.debug("✅ Hugging Face configurado (modelos dinámicos)")
+            else:
+                logger.debug("Hugging Face API key no configurada")
+        except Exception as e:
+            logger.debug(f"Error al configurar OpenRouter: {e}")
 
         self.check_best_provider()
+
+    def _discover_gemini_model(self) -> Optional[str]:
+        if not self.gemini_client:
+            return None
+        preferred = [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-2.5-flash",
+        ]
+        try:
+            models = self.gemini_client.models.list()
+            model_names: List[str] = []
+            for m in models:
+                name = getattr(m, "name", None)
+                if isinstance(name, str) and name:
+                    model_names.append(name)
+            for p in preferred:
+                for n in model_names:
+                    if n.endswith(p) or n == p or n.split("/")[-1] == p:
+                        return n.split("/")[-1]
+            if model_names:
+                return model_names[0].split("/")[-1]
+            return None
+        except Exception as e:
+            logger.debug(f"Gemini: no se pudo listar modelos: {e}")
+            return None
+
+    def _discover_openrouter_free_models(self, api_key: str) -> List[str]:
+        try:
+            resp = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"⚠️ OpenRouter: no se pudo listar modelos (HTTP {resp.status_code})")
+                return []
+            payload = resp.json() or {}
+            items = payload.get("data") or []
+            if not isinstance(items, list):
+                return []
+            free_ids: List[str] = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                mid = it.get("id")
+                if isinstance(mid, str) and mid.endswith(":free"):
+                    free_ids.append(mid)
+            free_ids = list(dict.fromkeys(free_ids))
+            return free_ids[: self.config.OPENROUTER_MODEL_DISCOVERY_LIMIT]
+        except Exception as e:
+            logger.debug(f"OpenRouter: no se pudo descubrir modelos gratuitos: {e}")
+            return []
+
+    def _refresh_huggingface_model_catalog(self, force: bool = False) -> None:
+        if not self.huggingface_api_key:
+            return
+        now = time.time()
+        if (not force) and (now - self._hf_models_last_refresh_ts) < self.config.HF_MODEL_DISCOVERY_REFRESH_SECONDS:
+            return
+        models, task_map = self._discover_huggingface_public_free_candidates()
+        if not models:
+            return
+        verified_models, verified_task_map = self._validate_huggingface_candidates(models, task_map)
+        if verified_models:
+            self.huggingface_models = verified_models
+            self._hf_model_task = verified_task_map
+            self._hf_models_last_refresh_ts = now
+
+    def _discover_huggingface_public_free_candidates(self) -> Tuple[List[str], Dict[str, str]]:
+        if InferenceClient is None:
+            return [], {}
+
+        def parse_billion_hint(model_id: str) -> Optional[float]:
+            s = model_id.lower()
+            m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", s)
+            if not m:
+                m = re.search(r"[-_/](\d+(?:\.\d+)?)b[-_/]", s)
+            if not m:
+                return None
+            try:
+                return float(m.group(1))
+            except Exception:
+                return None
+
+        def is_preferred_name(model_id: str) -> bool:
+            s = model_id.lower()
+            if any(k in s for k in ["instruct", "instruction", "chat", "-it", "_it", "assistant"]):
+                return True
+            return False
+
+        def fetch(tag: str, search: str) -> List[Dict[str, Any]]:
+            try:
+                resp = requests.get(
+                    "https://huggingface.co/api/models",
+                    params={
+                        "pipeline_tag": tag,
+                        "search": search,
+                        "sort": "downloads",
+                        "direction": -1,
+                        "limit": self.config.HF_MODEL_DISCOVERY_LIMIT,
+                    },
+                    timeout=self.config.HF_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"⚠️ HuggingFace: listado modelos falló (HTTP {resp.status_code}) tag={tag} search={search}")
+                    return []
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+                return []
+            except Exception as e:
+                logger.debug(f"HuggingFace: error consultando api/models: {e}")
+                return []
+
+        raw: List[Dict[str, Any]] = []
+        for tag in ["conversational", "text-generation"]:
+            for search in ["instruct", "chat"]:
+                raw.extend(fetch(tag, search))
+
+        seen: set = set()
+        candidates: List[Tuple[str, str, int, int, Optional[float]]] = []
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            model_id = it.get("modelId") or it.get("id")
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            if it.get("private") is True:
+                continue
+            if it.get("gated") is True:
+                continue
+            pipeline_tag = it.get("pipeline_tag")
+            if pipeline_tag not in ("conversational", "text-generation"):
+                continue
+            if not is_preferred_name(model_id):
+                continue
+            size_hint = parse_billion_hint(model_id)
+            if size_hint is not None and size_hint > float(self.config.HF_MAX_BILLIONS):
+                continue
+            downloads = it.get("downloads") or 0
+            likes = it.get("likes") or 0
+            try:
+                downloads_i = int(downloads)
+            except Exception:
+                downloads_i = 0
+            try:
+                likes_i = int(likes)
+            except Exception:
+                likes_i = 0
+            candidates.append((model_id, pipeline_tag, downloads_i, likes_i, size_hint))
+
+        candidates.sort(key=lambda x: (x[4] is None, x[4] or 0.0, -x[2], -x[3], x[0]))
+        selected: List[str] = []
+        task_map: Dict[str, str] = {}
+        for model_id, pipeline_tag, _, __, ___ in candidates[: self.config.HF_MODEL_DISCOVERY_LIMIT]:
+            selected.append(model_id)
+            task_map[model_id] = pipeline_tag
+        return selected, task_map
+
+    def _validate_huggingface_candidates(self, model_ids: List[str], task_map: Dict[str, str]) -> Tuple[List[str], Dict[str, str]]:
+        if not self.huggingface_api_key or InferenceClient is None:
+            return [], {}
+
+        client = InferenceClient(
+            api_key=self.huggingface_api_key,
+            provider="hf-inference",
+            timeout=self.config.HF_VALIDATE_TIMEOUT_SECONDS,
+        )
+
+        verified: List[str] = []
+        verified_task: Dict[str, str] = {}
+
+        def quick_probe(mid: str, preferred_task: str) -> Optional[str]:
+            prompt = "Responde solo con: OK"
+            try:
+                text = self._call_huggingface_model(client, mid, preferred_task, prompt, max_tokens=8).strip()
+                if text:
+                    return preferred_task
+            except Exception as e:
+                s = str(e).lower()
+                if "not supported for task" in s and "supported task" in s:
+                    alt = "conversational" if preferred_task == "text-generation" else "text-generation"
+                    try:
+                        text = self._call_huggingface_model(client, mid, alt, prompt, max_tokens=8).strip()
+                        if text:
+                            return alt
+                    except Exception:
+                        return None
+                if "402" in s or "payment" in s or "billing" in s:
+                    return None
+                if "401" in s or "unauthorized" in s:
+                    return None
+                if "403" in s or "forbidden" in s or "gated" in s:
+                    return None
+                if "404" in s or "not found" in s:
+                    return None
+                if "429" in s or "rate limit" in s:
+                    time.sleep(1)
+                    return None
+                if "503" in s or "loading" in s:
+                    return None
+                return None
+            return None
+
+        limit = min(len(model_ids), self.config.HF_VALIDATE_MAX_CANDIDATES)
+        for mid in model_ids[:limit]:
+            preferred_task = task_map.get(mid, "text-generation")
+            selected_task = self._run_with_timeout(lambda: quick_probe(mid, preferred_task), timeout_seconds=self.config.HF_VALIDATE_TIMEOUT_SECONDS)
+            if isinstance(selected_task, Exception):
+                continue
+            if isinstance(selected_task, str) and selected_task:
+                verified.append(mid)
+                verified_task[mid] = selected_task
+                if len(verified) >= self.config.HF_VALIDATE_TARGET_MODELS:
+                    break
+
+        if verified:
+            logger.debug(
+                f"🤗 HuggingFace: verificados {len(verified)}/{limit} modelos (target={self.config.HF_VALIDATE_TARGET_MODELS})"
+            )
+        return verified, verified_task
 
     def _run_with_timeout(self, fn: Callable[[], Any], timeout_seconds: int) -> Any:
         try:
@@ -112,10 +377,10 @@ class AIAnalyzerService:
         available: List[str] = []
         if self.gemini_client:
             available.append("gemini")
-        if self.openai_client:
-            available.append("openai")
         if self.openrouter_client:
             available.append("openrouter")
+        if self.huggingface_api_key:
+            available.append("huggingface")
 
         if not available:
             return []
@@ -123,6 +388,8 @@ class AIAnalyzerService:
         providers: List[str] = []
         if self.active_provider in available:
             providers.append(self.active_provider)  # type: ignore[arg-type]
+        default_order = ["huggingface", "openrouter", "gemini"]
+        providers.extend(p for p in default_order if p in available and p not in providers)
         providers.extend(p for p in available if p not in providers)
         return providers
 
@@ -134,6 +401,10 @@ class AIAnalyzerService:
             if provider == "gemini":
                 if not self.gemini_client:
                     raise RuntimeError("Gemini no configurado")
+                if not self.config.GEMINI_MODEL:
+                    self.config.GEMINI_MODEL = self._discover_gemini_model()
+                if not self.config.GEMINI_MODEL:
+                    raise RuntimeError("Gemini sin modelo compatible (no se pudo descubrir)")
                 response = self.gemini_client.models.generate_content(
                     model=self.config.GEMINI_MODEL,
                     contents=prompt,
@@ -149,31 +420,90 @@ class AIAnalyzerService:
                     raise RuntimeError("Respuesta vacía de Gemini")
                 return text
 
-            if provider == "openai":
-                if not self.openai_client:
-                    raise RuntimeError("OpenAI no configurado")
-                response = self.openai_client.chat.completions.create(
-                    model=self.config.OPENAI_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                    timeout=self._timeout,
-                )
-                if not response.choices:
-                    raise RuntimeError("Respuesta vacía de OpenAI")
-                return response.choices[0].message.content or ""
-
             if provider == "openrouter":
                 if not self.openrouter_client:
                     raise RuntimeError("OpenRouter no configurado")
-                response = self.openrouter_client.chat.completions.create(
-                    model=self.openrouter_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                    timeout=self._timeout,
-                )
-                if not response.choices:
-                    raise RuntimeError("Respuesta vacía de OpenRouter")
-                return response.choices[0].message.content or ""
+                self._ensure_openrouter_models()
+                if not self.openrouter_models:
+                    raise RuntimeError("OpenRouter: no hay modelos gratuitos disponibles")
+                
+                # Probar con todos los modelos de OpenRouter
+                last_error = None
+                for model_index, model in enumerate(self.openrouter_models):
+                    try:
+                        logger.info(f"🤖 OpenRouter probando modelo: {model}")
+                        response = self.openrouter_client.chat.completions.create(
+                            model=model,
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=max_tokens,
+                            timeout=self._timeout,
+                        )
+                        if not response.choices:
+                            raise RuntimeError(f"Respuesta vacía de OpenRouter ({model})")
+                        
+                        result_text = response.choices[0].message.content or ""
+                        logger.info(f"✅ Éxito con OpenRouter modelo: {model}")
+                        self.current_openrouter_model_index = model_index
+                        return result_text
+                        
+                    except Exception as model_err:
+                        last_error = model_err
+                        err_str = str(model_err)
+                        if "429" in err_str or "rate limit" in err_str.lower():
+                            logger.warning(f"⏳ OpenRouter rate limit con {model}, probando siguiente")
+                            time.sleep(1)
+                        else:
+                            logger.warning(f"⚠️ OpenRouter modelo {model} falló: {err_str[:140]}")
+                        continue
+                
+                # Si todos los modelos fallaron
+                raise RuntimeError(f"Todos los modelos de OpenRouter fallaron. Último error: {last_error}")
+
+            if provider == "huggingface":
+                if not self.huggingface_api_key:
+                    raise RuntimeError("Hugging Face no configurado")
+                
+                if InferenceClient is None:
+                    raise RuntimeError("Librería 'huggingface_hub' no instalada")
+                    
+                last_error = None
+
+                self._refresh_huggingface_model_catalog(force=False)
+                if not self.huggingface_models:
+                    self._refresh_huggingface_model_catalog(force=True)
+                if not self.huggingface_models:
+                    raise RuntimeError("HuggingFace: no hay modelos candidatos disponibles")
+
+                client = InferenceClient(api_key=self.huggingface_api_key, provider="hf-inference")
+
+                for model in self.huggingface_models:
+                    try:
+                        task = self._hf_model_task.get(model, "text-generation")
+                        logger.info(f"🤗 HuggingFace probando modelo: {model} (task={task})")
+                        text = self._call_huggingface_model(client, model, task, prompt, max_tokens=max_tokens)
+                        if not text:
+                             raise RuntimeError("Respuesta vacía")
+
+                        logger.info(f"✅ Éxito con HuggingFace modelo: {model} (task={task})")
+                        return text
+                            
+                    except Exception as model_err:
+                        err_str = str(model_err).lower()
+                        if "503" in err_str or "loading" in err_str:
+                             logger.warning(f"⏳ HuggingFace modelo {model} cargando (503). Probando siguiente")
+                        elif "429" in err_str or "rate limit" in err_str:
+                             logger.warning(f"⏳ HuggingFace rate limit con {model}. Probando siguiente")
+                             time.sleep(1)
+                        elif "not found" in err_str or "404" in err_str:
+                             logger.warning(f"🧹 HuggingFace modelo inexistente/no accesible: {model}")
+                        elif "not supported for task" in err_str and "supported task" in err_str:
+                             logger.warning(f"🔁 HuggingFace task no compatible con {model}: {str(model_err)[:140]}")
+                        else:
+                             logger.warning(f"⚠️ Error HuggingFace {model}: {err_str[:140]}")
+                        last_error = model_err
+                        continue
+                
+                raise RuntimeError(f"Todos los modelos de HuggingFace fallaron. Último error: {last_error}")
 
             raise RuntimeError("Proveedor inválido")
 
@@ -185,6 +515,15 @@ class AIAnalyzerService:
         elapsed = time.time() - start
         self._metrics["total_time"][provider] += elapsed
         return str(result)
+
+    def _ensure_openrouter_models(self) -> None:
+        if self.openrouter_models:
+            return
+        if not self._openrouter_api_key:
+            return
+        self.openrouter_models = self._discover_openrouter_free_models(api_key=self._openrouter_api_key)
+        if self.openrouter_models:
+            logger.debug(f"🔎 OpenRouter: detectados {len(self.openrouter_models)} modelos :free")
 
     def _call_with_fallback_robust(self, prompt: str, max_tokens: int = 2048) -> Tuple[str, Optional[str]]:
         """
@@ -212,6 +551,7 @@ class AIAnalyzerService:
             except Exception as e:
                 last_error = e
                 logger.warning(f"⚠️ Falló {provider}: {str(e)}")
+                logger.info("🔁 Activando fallback al siguiente proveedor...")
                 if self._is_quota_error(e):
                     logger.warning(f"⏳ Quota excedida en {provider}")
 
@@ -227,6 +567,10 @@ class AIAnalyzerService:
     def _test_gemini(self) -> Any:
         if not self.gemini_client:
             return RuntimeError("Gemini no configurado")
+        if not self.config.GEMINI_MODEL:
+            self.config.GEMINI_MODEL = self._discover_gemini_model()
+        if not self.config.GEMINI_MODEL:
+            return RuntimeError("Gemini sin modelo compatible (no se pudo descubrir)")
         response = self.gemini_client.models.generate_content(
             model=self.config.GEMINI_MODEL,
             contents="Hola",
@@ -241,74 +585,126 @@ class AIAnalyzerService:
             return RuntimeError("Respuesta vacía de Gemini")
         return True
 
-    def _test_openai(self) -> Any:
-        if not self.openai_client:
-            return RuntimeError("OpenAI no configurado")
-        response = self.openai_client.chat.completions.create(
-            model=self.config.OPENAI_MODEL,
-            messages=[{"role": "user", "content": "Hola"}],
-            max_tokens=5,
-            timeout=self._timeout,
-        )
-        if not response.choices:
-            return RuntimeError("Respuesta vacía de OpenAI")
-        return True
-
     def _test_openrouter(self) -> Any:
         if not self.openrouter_client:
             return RuntimeError("OpenRouter no configurado")
+        
+        # Probar con el primer modelo de la lista
+        self._ensure_openrouter_models()
+        first_model = self.openrouter_models[0] if self.openrouter_models else None
+        if not first_model:
+            return RuntimeError("OpenRouter: no hay modelos gratuitos disponibles")
+        logger.debug(f"📝 Testeando OpenRouter con modelo: {first_model}")
+        
         response = self.openrouter_client.chat.completions.create(
-            model=self.openrouter_model,
+            model=first_model,
             messages=[{"role": "user", "content": "Hola"}],
             max_tokens=5,
             timeout=self._timeout,
         )
         if not response.choices:
-            return RuntimeError("Respuesta vacía de OpenRouter")
+            return RuntimeError(f"Respuesta vacía de OpenRouter ({first_model})")
         return True
+
+    def _test_huggingface(self) -> Any:
+        if not self.huggingface_api_key:
+            return RuntimeError("Hugging Face no configurado")
+            
+        if InferenceClient is None:
+            return RuntimeError("Librería 'huggingface_hub' no instalada")
+        
+        try:
+            _ = self._call_provider("huggingface", "Hola, responde solo con OK", max_tokens=5)
+            return True
+        except Exception as e:
+            err_str = str(e).lower()
+            if "503" in err_str:
+                logger.debug("⚠️ Modelo HuggingFace cargando (503), conexión OK")
+                return True
+            return e
 
     def check_best_provider(self) -> None:
         """Verifica qué API responde y selecciona la activa para este ciclo."""
-        # 1. Probar Gemini
+        # 1. Probar Hugging Face primero
         try:
-            if self.gemini_client:
-                result = self._run_with_timeout(self._test_gemini, timeout_seconds=6)
+            if self.huggingface_api_key:
+                result = self._run_with_timeout(self._test_huggingface, timeout_seconds=8)
                 if result is True:
-                    self.active_provider = 'gemini'
+                    self.active_provider = 'huggingface'
+                    logger.info(f"✅ Proveedor activo: Hugging Face ({len(self.huggingface_models)} modelos)")
                     return
                 if isinstance(result, Exception):
                     raise result
         except Exception as e:
-            if not self._is_quota_error(e):
-                logger.debug("Gemini no disponible")
+            logger.debug(f"Hugging Face no disponible: {e}")
 
-        # 2. Probar OpenAI (Fallback)
-        try:
-            if self.openai_client:
-                result = self._run_with_timeout(self._test_openai, timeout_seconds=6)
-                if result is True:
-                    self.active_provider = 'openai'
-                    return
-                if isinstance(result, Exception):
-                    raise result
-        except Exception as e:
-            if not self._is_quota_error(e):
-                logger.debug("OpenAI no disponible")
-
-        # 3. Probar OpenRouter (Fallback)
+        # 2. Probar OpenRouter
         try:
             if self.openrouter_client:
                 result = self._run_with_timeout(self._test_openrouter, timeout_seconds=6)
                 if result is True:
                     self.active_provider = 'openrouter'
+                    logger.info(f"✅ Proveedor activo: OpenRouter ({len(self.openrouter_models)} modelos disponibles)")
                     return
                 if isinstance(result, Exception):
                     raise result
         except Exception as e:
             if not self._is_quota_error(e):
                 logger.debug("OpenRouter no disponible")
+
+        # 3. Probar Gemini
+        try:
+            if self.gemini_client:
+                result = self._run_with_timeout(self._test_gemini, timeout_seconds=6)
+                if result is True:
+                    self.active_provider = 'gemini'
+                    logger.info(f"✅ Proveedor activo: Gemini (modelo={self.config.GEMINI_MODEL})")
+                    return
+                if isinstance(result, Exception):
+                    raise result
+        except Exception as e:
+            if not self._is_quota_error(e):
+                logger.debug("Gemini no disponible")
             
         self.active_provider = None
+        logger.warning("⚠️ Ningún proveedor de IA disponible")
+
+    def _call_huggingface_model(self, client: Any, model: str, task: str, prompt: str, max_tokens: int) -> str:
+        messages = [{"role": "user", "content": prompt}]
+        if task == "conversational":
+            try:
+                resp = client.chat_completion(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.7,
+                    top_p=0.95,
+                )
+                text = resp.choices[0].message.content
+                return text or ""
+            except Exception as e:
+                err = str(e).lower()
+                if "not supported for task" in err and "supported task" in err:
+                    return self._call_huggingface_model(client, model, task="text-generation", prompt=prompt, max_tokens=max_tokens)
+                raise
+
+        if task == "text-generation":
+            try:
+                resp = client.text_generation(
+                    prompt=prompt,
+                    model=model,
+                    max_new_tokens=max_tokens,
+                    temperature=0.7,
+                    return_full_text=False,
+                )
+                return str(resp or "")
+            except Exception as e:
+                err = str(e).lower()
+                if "not supported for task" in err and "supported task" in err:
+                    return self._call_huggingface_model(client, model, task="conversational", prompt=prompt, max_tokens=max_tokens)
+                raise
+
+        raise RuntimeError(f"HuggingFace: task inválida ({task})")
 
     def _generate_content(self, prompt: str, max_tokens: int = 2048) -> str:
         text, _ = self._call_with_fallback_robust(prompt, max_tokens=max_tokens)

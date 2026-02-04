@@ -116,6 +116,9 @@ class Config:
     # ========== GOOGLE GEMINI ==========
     GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
     
+    # ========== HUGGING FACE ==========
+    HUGGINGFACE_API_KEY = os.getenv('HUGGINGFACE_API_KEY') or os.getenv('HUGGIN_FACE_API_KEY')
+    
     # ========== TWELVE DATA ==========
     TWELVEDATA_API_KEY = os.getenv('TWELVEDATA_API_KEY')
     
@@ -349,6 +352,16 @@ class Config:
             'group': TELEGRAM_GROUP_SIGNALS
         }
     }
+    
+    # ========== TWITTER ENGAGEMENT ==========
+    TWITTER_ENGAGEMENT_ENABLED = os.getenv('TWITTER_ENGAGEMENT_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+    TWITTER_MAX_LIKES = int(os.getenv('TWITTER_MAX_LIKES', '10'))
+    TWITTER_MAX_COMMENTS = int(os.getenv('TWITTER_MAX_COMMENTS', '5'))
+    TWITTER_ENGAGEMENT_DELAY_MIN = int(os.getenv('TWITTER_ENGAGEMENT_DELAY_MIN', '2'))
+    TWITTER_ENGAGEMENT_DELAY_MAX = int(os.getenv('TWITTER_ENGAGEMENT_DELAY_MAX', '5'))
+    TWITTER_COMMENT_DELAY_MIN = int(os.getenv('TWITTER_COMMENT_DELAY_MIN', '5'))
+    TWITTER_COMMENT_DELAY_MAX = int(os.getenv('TWITTER_COMMENT_DELAY_MAX', '10'))
+
 
     @classmethod
     def validate(cls):
