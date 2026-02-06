@@ -128,6 +128,10 @@ class Config:
     
     # ========== OPENROUTER ==========
     OPENROUTER_API_KEY = os.getenv('GOOGLE_OPENROUTER_API_KEY') or os.getenv('OPENROUTER_API_KEY')
+    OLLAMA_HOST = os.getenv('OLLAMA_HOST')
+    OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b')
+    OLLAMA_HEALTH_CACHE_SECONDS = int(os.getenv('OLLAMA_HEALTH_CACHE_SECONDS', '60'))
+    OLLAMA_PREFER_LOCAL_ON_LINUX = os.getenv('OLLAMA_PREFER_LOCAL_ON_LINUX', 'true').lower() in ('1', 'true', 'yes')
     
     # ========== CONFIGURACIÓN DEL BOT ==========
     MIN_CHANGE_PERCENT = float(os.getenv('MIN_CHANGE_PERCENT', '10'))
@@ -146,7 +150,7 @@ class Config:
     TWITTER_POST_DELAY = 10       # Segundos de espera entre tweets
 
     # Número de pares por volumen a escanear para cálculo de cambio 2h (evita usar only-significant)
-    BINANCE_TOP_2H_SCAN_LIMIT = int(os.getenv('BINANCE_TOP_2H_SCAN_LIMIT', '150'))  # Ajustable via .env
+    BINANCE_TOP_2H_SCAN_LIMIT = int(os.getenv('BINANCE_TOP_2H_SCAN_LIMIT', '4000'))  # Ajustable via .env
     
     # ========== LISTAS MERCADOS TRADICIONALES ==========
     STOCK_SYMBOLS_DEFAULT = [
