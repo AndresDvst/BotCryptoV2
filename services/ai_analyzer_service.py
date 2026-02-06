@@ -108,19 +108,25 @@ class AIAnalyzerService:
         self._gemini_model_cache: Optional[str] = None
         
         # Configurar Ollama
-        _raw_ollama_host = getattr(Config, "OLLAMA_HOST", "") or ""
-        _prefer_local = bool(getattr(Config, "OLLAMA_PREFER_LOCAL_ON_LINUX", True))
-        if bool(getattr(Config, "IS_LINUX", False)) and _prefer_local:
-            self.ollama_host = "http://localhost:11434"
-        else:
-            self.ollama_host = _raw_ollama_host
-        self.ollama_host = self._format_ollama_host(self.ollama_host)
+        # ✅ CORREGIDO: Usar método de Config para auto-detectar VPS
+        try:
+            ollama_host_raw = Config.get_ollama_host() if hasattr(Config, 'get_ollama_host') else getattr(Config, "OLLAMA_HOST", "")
+        except:
+            ollama_host_raw = getattr(Config, "OLLAMA_HOST", "")
+        
+        self.ollama_host = self._format_ollama_host(ollama_host_raw)
         self.ollama_model: str = getattr(Config, "OLLAMA_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
         self._ollama_health_cache_seconds: int = int(getattr(Config, "OLLAMA_HEALTH_CACHE_SECONDS", 60) or 60)
         self._ollama_health_last_ts: float = 0.0
         self._ollama_health_last_ok: bool = False
+        
         if self.ollama_host:
             self._providers["ollama"] = "ollama"
+            logger.info(f"🦙 Ollama configurado: {self.ollama_host} (modelo={self.ollama_model})")
+            # Detectar si estamos en VPS
+            is_vps = getattr(Config, "IS_VPS", False) or (getattr(Config, "IS_LINUX", False) and not getattr(Config, "IS_DOCKER", False))
+            if is_vps:
+                logger.info("   📍 Detectado VPS/Linux - usando Ollama local")
 
         # Configurar Gemini
         try:

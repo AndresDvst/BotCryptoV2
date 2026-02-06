@@ -59,9 +59,13 @@ class Config:
     TWITTER_HEADLESS = os.getenv('TWITTER_HEADLESS', 'False').lower() in ('1', 'true', 'yes')
     
     # ========== DETECCIÓN DE ENTORNO (Windows/Linux/Docker) ==========
+    # ✅ CORREGIDO: Detección mejorada de VPS
     IS_DOCKER = os.getenv('DOCKER_ENV', 'false').lower() in ('1', 'true', 'yes') or os.path.exists('/.dockerenv')
-    IS_LINUX = os.name != 'nt'
+    IS_LINUX = os.name == 'posix'  # ✅ Cambio: más confiable que != 'nt'
     IS_WINDOWS = os.name == 'nt'
+    
+    # ✅ NUEVO: Detectar si estamos en VPS (Linux pero no Docker)
+    IS_VPS = IS_LINUX and not IS_DOCKER
     
     # Helper para detectar rutas de Windows (ignorarlas en Linux)
     @staticmethod
@@ -78,7 +82,7 @@ class Config:
         CHROME_USER_DATA_DIR = '/app/chrome_profile'
     elif IS_LINUX:
         # Si el .env tiene ruta de Windows, ignorarla
-        if _is_windows_path.__func__(_env_chrome_user_data):
+        if _is_windows_path(_env_chrome_user_data):
             CHROME_USER_DATA_DIR = os.path.join(BASE_DIR, 'chrome_profile')
         else:
             CHROME_USER_DATA_DIR = _env_chrome_user_data or os.path.join(BASE_DIR, 'chrome_profile')
@@ -105,7 +109,7 @@ class Config:
     _env_chromedriver = os.getenv('CHROMEDRIVER_PATH', '')
     if IS_DOCKER or IS_LINUX:
         # En Linux/Docker: ignorar rutas de Windows del .env
-        if _is_windows_path.__func__(_env_chromedriver):
+        if _is_windows_path(_env_chromedriver):
             CHROMEDRIVER_PATH = '/usr/bin/chromedriver'
         else:
             CHROMEDRIVER_PATH = _env_chromedriver or '/usr/bin/chromedriver'
@@ -128,7 +132,10 @@ class Config:
     
     # ========== OPENROUTER ==========
     OPENROUTER_API_KEY = os.getenv('GOOGLE_OPENROUTER_API_KEY') or os.getenv('OPENROUTER_API_KEY')
-    OLLAMA_HOST = os.getenv('OLLAMA_HOST')
+    
+    # ========== OLLAMA ==========
+    # ✅ CORREGIDO: Auto-detección de Ollama local en VPS
+    OLLAMA_HOST = os.getenv('OLLAMA_HOST', '')
     OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b')
     OLLAMA_HEALTH_CACHE_SECONDS = int(os.getenv('OLLAMA_HEALTH_CACHE_SECONDS', '60'))
     OLLAMA_PREFER_LOCAL_ON_LINUX = os.getenv('OLLAMA_PREFER_LOCAL_ON_LINUX', 'true').lower() in ('1', 'true', 'yes')
@@ -366,6 +373,38 @@ class Config:
     TWITTER_COMMENT_DELAY_MIN = int(os.getenv('TWITTER_COMMENT_DELAY_MIN', '5'))
     TWITTER_COMMENT_DELAY_MAX = int(os.getenv('TWITTER_COMMENT_DELAY_MAX', '10'))
 
+    @classmethod
+    def get_ollama_host(cls) -> str:
+        """
+        Determina el host de Ollama basándose en el entorno.
+    
+        Lógica:
+        - VPS/Linux (no Docker): usa localhost:11434 si PREFER_LOCAL=true
+        - Docker/Windows: usa OLLAMA_HOST del .env
+    
+        Returns:
+            str: URL del host de Ollama o cadena vacía si no configurado
+        """
+        env_host = (cls.OLLAMA_HOST or "").strip()
+    
+        # Si estamos en VPS y preferimos local
+        if cls.IS_VPS and cls.OLLAMA_PREFER_LOCAL_ON_LINUX:
+            return "http://localhost:11434"
+    
+        # Si hay host en .env, usarlo
+        if env_host:
+            # Limpiar duplicaciones de protocolo
+            while any(env_host.startswith(dup) for dup in ["http://http://", "https://https://"]):
+                env_host = env_host.replace("http://http://", "http://", 1).replace("https://https://", "https://", 1)
+        
+            # Agregar protocolo si falta
+            if not env_host.startswith(("http://", "https://")):
+                env_host = f"http://{env_host}"
+        
+            return env_host.rstrip("/")
+    
+        # Default: no configurado
+        return ""
 
     @classmethod
     def validate(cls):
