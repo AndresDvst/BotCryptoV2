@@ -113,8 +113,14 @@ class AIAnalyzerService:
             ollama_host_raw = Config.get_ollama_host() if hasattr(Config, 'get_ollama_host') else getattr(Config, "OLLAMA_HOST", "")
         except:
             ollama_host_raw = getattr(Config, "OLLAMA_HOST", "")
-        
-        self.ollama_host = self._format_ollama_host(ollama_host_raw)
+
+        env_ollama_host_raw = getattr(Config, "OLLAMA_HOST", "") or ""
+        candidate = self._format_ollama_host(ollama_host_raw)
+        env_candidate = self._format_ollama_host(env_ollama_host_raw)
+        if candidate == "http://localhost:11434" and env_candidate and env_candidate != candidate:
+            if not self._quick_ollama_ping(candidate):
+                candidate = env_candidate
+        self.ollama_host = candidate
         self.ollama_model: str = getattr(Config, "OLLAMA_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
         self._ollama_health_cache_seconds: int = int(getattr(Config, "OLLAMA_HEALTH_CACHE_SECONDS", 60) or 60)
         self._ollama_health_last_ts: float = 0.0
@@ -443,6 +449,7 @@ class AIAnalyzerService:
         h = (host or "").strip()
         if not h:
             return ""
+        h = h.split()[0]
         # Eliminar duplicaciones de protocolo
         while any(h.startswith(dup) for dup in ["http://http://", "https://https://", "http://https://", "https://http://"]):
             for dup in ["http://http://", "https://https://", "http://https://", "https://http://"]:
@@ -478,8 +485,15 @@ class AIAnalyzerService:
             raise RuntimeError("Respuesta vacía de Ollama")
         return text
 
+    def _quick_ollama_ping(self, host: str) -> bool:
+        try:
+            resp = requests.get(f"{host}/api/version", timeout=(1, 2))
+            return resp.status_code == 200
+        except Exception:
+            return False
+
     def _ollama_health_ok(self) -> bool:
-        """Verifica si Ollama está disponible (con cache)."""
+        """Verifica si Ollama est?? disponible (con cache)."""
         host = self._format_ollama_host(self.ollama_host)
         if not host:
             return False
@@ -487,18 +501,32 @@ class AIAnalyzerService:
         with self._state_lock:
             if self._ollama_health_cache_seconds > 0 and (now - self._ollama_health_last_ts) < self._ollama_health_cache_seconds:
                 return self._ollama_health_last_ok
+
+        # Ping ligero para evitar cargar el modelo en cold start
+        try:
+            resp = requests.get(f"{host}/api/version", timeout=(1, 2))
+            if resp.status_code == 200:
+                with self._state_lock:
+                    self._ollama_health_last_ts = now
+                    self._ollama_health_last_ok = True
+                return True
+        except Exception:
+            pass
+
         ok = False
+        probe_prompt = "Responde solo con: OK"
         result = self._run_with_timeout(
-            lambda: self._call_ollama("OK", max_tokens=6, allow_short=True), 
-            timeout_seconds=min(4, self._timeout)
+            lambda: self._call_ollama(probe_prompt, max_tokens=10, allow_short=True),
+            timeout_seconds=min(30, self._timeout) if self._timeout else 30,
         )
-        if isinstance(result, str) and result.strip():
+        if isinstance(result, str) and "ok" in result.lower():
+            ok = True
+        elif isinstance(result, str) and result.strip():
             ok = True
         with self._state_lock:
             self._ollama_health_last_ts = now
             self._ollama_health_last_ok = ok
         return ok
-
     def _get_provider_priority_list(self) -> List[str]:
         """Obtiene lista priorizada de proveedores disponibles."""
         available: List[str] = []
@@ -630,6 +658,8 @@ class AIAnalyzerService:
                             raise RuntimeError(f"Respuesta vacía de OpenRouter ({model})")
                         
                         result_text = response.choices[0].message.content or ""
+                        if not result_text.strip():
+                            raise RuntimeError(f"Respuesta vacía de OpenRouter ({model})")
                         
                         if logger.isEnabledFor(logging.DEBUG):
                             logger.debug(f"✅ Éxito con OpenRouter modelo: {model}")
