@@ -1708,7 +1708,8 @@ INSTRUCCIONES:
 1. Ignora noticias irrelevantes, spam, o de bajo impacto.
 2. Selecciona las noticias con score de relevancia >= 7 sobre 10.
 3. Clasifica cada noticia en: 'crypto' (general), 'markets' (bolsa/forex/macro), 'signals' (señales de trading específicas).
-4. Devuelve el resultado en formato JSON puro (sin markdown).
+4. Traduce el título al español y devuélvelo en el campo "title_es". Si ya está en español, copia el mismo texto.
+5. Devuelve el resultado en formato JSON puro (sin markdown).
 
 FORMATO DE RESPUESTA JSON (Lista de objetos):
 [
@@ -1716,7 +1717,8 @@ FORMATO DE RESPUESTA JSON (Lista de objetos):
     "original_index": <número del índice original en la lista>,
     "score": <número 7-10>,
     "summary": "<Resumen de 1 linea en español>",
-    "category": "<crypto|markets|signals>"
+    "category": "<crypto|markets|signals>",
+    "title_es": "<Título traducido al español>"
   }},
   ...
 ]

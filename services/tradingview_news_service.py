@@ -251,7 +251,8 @@ class TradingViewNewsService:
                 original_news['analysis'] = {
                     'score': item.get('score', 0),
                     'summary': item.get('summary', 'Sin resumen'),
-                    'category': item.get('category', 'crypto')
+                    'category': item.get('category', 'crypto'),
+                    'title_es': item.get('title_es', '').strip()
                 }
                 if original_news['analysis']['score'] >= self._score_threshold:
                     important_news.append(original_news)
@@ -268,24 +269,40 @@ class TradingViewNewsService:
         else:
             logger.info("✅ Ninguna noticia superó el umbral de relevancia (7/10)")
 
+    def _normalize_title(self, title: str) -> str:
+        if not title:
+            return ""
+        cleaned = re.sub(r"^\s*TradingView\s+[A-Za-z0-9/\-_.]+:\s*", "", title, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*TradingView\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
+
+    def _dedupe_summary(self, title: str, summary: str) -> str:
+        if not title or not summary:
+            return summary
+        title_norm = title.lower().strip()
+        summary_norm = summary.lower()
+        if title_norm and title_norm in summary_norm:
+            return summary.replace(title, "").strip(" -—:;.,")
+        return summary
+
     def _format_professional_news_message(self, news_item: dict, has_image: bool) -> str:
         """Formatea mensaje profesional"""
         category = news_item.get('analysis', {}).get('category', 'crypto')
-        title = news_item.get('title', '')
+        title_es = news_item.get('analysis', {}).get('title_es', '')
+        title = self._normalize_title(title_es or news_item.get('title', ''))
         summary = news_item.get('analysis', {}).get('summary', '')
+        summary = self._dedupe_summary(title, summary)
         score = news_item.get('analysis', {}).get('score', 0)
         
         emoji_map = {'crypto': '🪙', 'markets': '📈', 'signals': '🎯'}
         emoji = emoji_map.get(category, '📰')
         relevance = "⭐" * min(score, 10)
         
+        summary_block = f"\n\n{summary}" if summary else ""
+        relevance_line = f"\n📊 Relevancia: {relevance} ({score}/10)" if score > 0 else ""
         return f"""{emoji} **NOTICIA {category.upper()}**
 
-📌 **{title}**
-
-{summary}
-
-{'📊 Relevancia: ' + relevance + f' ({score}/10)' if score > 0 else ''}
+📌 **{title}**{summary_block}{relevance_line}
 Fuente: TradingView"""
 
     def _publish_news(self, news_list: List[Dict], dry_run: bool = False):
@@ -333,15 +350,23 @@ Fuente: TradingView"""
                 try:
                     emoji = '🪙' if category == 'crypto' else '📈' if category == 'markets' else '🎯'
                     summary = news['analysis'].get('summary', '').strip()
-                    title = title.strip()
-                    suffix = f"#Trading #News #{category}"
-                    available = 280 - (len(title) + len(suffix) + 4 + len(emoji) + 1)
+                    title_es = news['analysis'].get('title_es', '').strip()
+                    title = self._normalize_title(title_es or title.strip())
+                    summary = self._dedupe_summary(title, summary)
+                    suffix = f"#Trading #News #{category} "
+                    base_len = len(emoji) + 1 + len(title) + len(suffix)
+                    spacer_len = 2 if summary else 0
+                    available = 280 - (base_len + spacer_len + (2 if summary else 0))
                     if available < 0:
-                        max_title = 280 - (len(suffix) + 4 + len(emoji) + 1)
+                        max_title = 280 - (len(suffix) + 1 + len(emoji) + spacer_len + (2 if summary else 0))
                         title = title[:max(0, max_title)].rstrip()
-                        available = 280 - (len(title) + len(suffix) + 4 + len(emoji) + 1)
+                        base_len = len(emoji) + 1 + len(title) + len(suffix)
+                        available = 280 - (base_len + spacer_len + (2 if summary else 0))
                     summary = summary[:max(0, available)].rstrip()
-                    tweet_text = f"{emoji} {title}\n\n{summary}\n\n{suffix}".strip()
+                    if summary:
+                        tweet_text = f"{emoji} {title}\n\n{summary}\n\n{suffix}"
+                    else:
+                        tweet_text = f"{emoji} {title}\n\n{suffix}"
                     def send_twitter():
                         ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_path, category="news")
                         if not ok:
