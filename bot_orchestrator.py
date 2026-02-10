@@ -44,6 +44,7 @@ class CryptoBotOrchestrator:
         "news": 0.5,
         "price_alerts": 0.25,
         "stable_coins": 1.0,
+        "traditional_markets": 2.0,
     }
 
     COOLDOWN_FILE = "last_publication.json"
@@ -346,7 +347,7 @@ class CryptoBotOrchestrator:
             self._publish_stable_coins_2h()
         return status
 
-    def run_analysis_cycle(self, category: str = "market_analysis", max_retries: int = 3, dry_run: bool = False, is_morning: bool = False) -> bool:
+    def run_analysis_cycle(self, category: str = "market_analysis", max_retries: int = 3, dry_run: bool = False, is_morning: bool = False, include_traditional_markets: bool = True) -> bool:
         """Ejecuta ciclo de análisis con reintentos y publicación separada"""
         hc = self.health_check()
         if not hc.get("binance") or not hc.get("ai_analyzer"):
@@ -368,7 +369,7 @@ class CryptoBotOrchestrator:
                         pass
                 
                 # --- ANÁLISIS DE MERCADOS TRADICIONALES (3 veces al día) ---
-                if self.traditional_markets:
+                if include_traditional_markets and self.traditional_markets:
                     current_hour = datetime.now().hour
                     # Ejecutar a las 8 (mañana), 14 (tarde), 20 (noche) aprox.
                     # Se usa un rango pequeño para asegurar ejecución
@@ -377,10 +378,14 @@ class CryptoBotOrchestrator:
                     should_run_signals = any(h == current_hour for h in target_hours)
                     
                     # Ejecutar siempre el resumen general (movers), pero signals solo en horas clave
-                    try:
-                        self.traditional_markets.run_traditional_markets_analysis(publish=True, get_signals=should_run_signals)
-                    except Exception as e:
-                       logger.error(f"❌ Error en análisis tradicional: {e}")
+                    if self._can_publish("traditional_markets"):
+                        try:
+                            self.traditional_markets.run_traditional_markets_analysis(publish=True, get_signals=should_run_signals)
+                            self._save_last_publication_time("traditional_markets")
+                        except Exception as e:
+                            logger.error(f"❌ Error en análisis tradicional: {e}")
+                    else:
+                        logger.info("⏭️ Análisis tradicional en cooldown, omitiendo")
 
                 # --- NOTICIAS ---
                 if self.news_service:

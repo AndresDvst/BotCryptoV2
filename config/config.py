@@ -179,6 +179,8 @@ class Config:
     STOCKS_IMAGE_PATH = os.getenv('STOCKS_IMAGE_PATH', os.path.join(IMAGES_DIR, 'ACCIONES.png'))
     FOREX_IMAGE_PATH = os.getenv('FOREX_IMAGE_PATH', os.path.join(IMAGES_DIR, 'FOREX.png'))
     COMMODITIES_IMAGE_PATH = os.getenv('COMMODITIES_IMAGE_PATH', os.path.join(IMAGES_DIR, 'MINERALES.png'))
+    NEWS_IMAGE_PATH = os.getenv('NEWS_IMAGE_PATH', os.path.join(IMAGES_DIR, 'NOTICIAS.png'))
+    BONDS_IMAGE_PATH = os.getenv('BONDS_IMAGE_PATH', os.path.join(IMAGES_DIR, 'BONOS.png'))
     SIGNALS_IMAGE_PATH = os.getenv('SIGNALS_IMAGE_PATH', os.path.join(IMAGES_DIR, 'SEÑALES.png'))
     MORNING_IMAGE_PATH = os.getenv('MORNING_IMAGE_PATH', REPORT_24H_IMAGE_PATH)
     REPORT_IMAGE_PATH = os.getenv('REPORT_IMAGE_PATH', REPORT_2H_IMAGE_PATH)

@@ -622,11 +622,10 @@ class TechnicalAnalysisService:
             # Si se pasó el objeto telegram, intentar enviar
             if telegram:
                 try:
-                    # Verificar si existe el método antes de llamar
-                    if hasattr(telegram, 'send_signals_report'):
-                        telegram.send_signals_report(results)
+                    if hasattr(telegram, 'send_signal_message'):
+                        telegram.send_signal_message(results)
                     else:
-                        logger.warning("⚠️ El objeto Telegram no tiene método send_signals_report")
+                        logger.warning("⚠️ El objeto Telegram no tiene método send_signal_message")
                 except Exception as e:
                     logger.warning(f"⚠️ Error enviando a Telegram: {e}")
         else:

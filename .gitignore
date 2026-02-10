@@ -54,6 +54,7 @@ chromedriver.exe
 chrome_profile/
 external/
 DocumentacionVPS.md
+TareasPendientes.txt
 
 # Archivos de debug temporal
 *.html

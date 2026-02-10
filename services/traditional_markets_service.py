@@ -618,7 +618,7 @@ class TraditionalMarketsService:
             msg = "\n".join(lines)
             
             try:
-                self.telegram.send_market_message(msg)
+                self.telegram.send_signal_message(msg)
                 # Guardar señales en historial después de publicar exitosamente
                 for signal in new_items:
                     self._save_signal_to_history(signal['symbol'], signal['type'])

@@ -9,7 +9,6 @@ import subprocess
 import shutil
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 import tempfile
-import requests
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -269,27 +268,6 @@ class TradingViewNewsService:
         else:
             logger.info("✅ Ninguna noticia superó el umbral de relevancia (7/10)")
 
-    def _extract_keywords(self, title: str) -> list:
-        """Extrae símbolos/tickers del título"""
-        tickers = re.findall(r'\b[A-Z]{2,5}\b', title)
-        return tickers[:3]
-
-    def _fetch_yahoo_finance_image(self, title: str, summary: str) -> Optional[str]:
-        """Busca imagen en Yahoo Finance"""
-        try:
-            keywords = self._extract_keywords(title)
-            search_url = f"https://finance.yahoo.com/quote/{keywords[0]}" if keywords else None
-            
-            if search_url:
-                response = requests.get(search_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-                if response.status_code == 200:
-                    match = re.search(r'<meta property="og:image" content="([^"]+)"', response.text)
-                    if match:
-                        return match.group(1)
-            return None
-        except Exception:
-            return None
-
     def _format_professional_news_message(self, news_item: dict, has_image: bool) -> str:
         """Formatea mensaje profesional"""
         category = news_item.get('analysis', {}).get('category', 'crypto')
@@ -308,8 +286,7 @@ class TradingViewNewsService:
 {summary}
 
 {'📊 Relevancia: ' + relevance + f' ({score}/10)' if score > 0 else ''}
-
-🔗 Fuente: TradingView"""
+Fuente: TradingView"""
 
     def _publish_news(self, news_list: List[Dict], dry_run: bool = False):
         """Publica las noticias filtradas"""
@@ -319,11 +296,10 @@ class TradingViewNewsService:
             # Obtener categoría del análisis batch
             category = news['analysis'].get('category', 'crypto').lower()
             
-            # Buscar imagen
-            image_url = self._fetch_yahoo_finance_image(title, news['analysis'].get('summary', ''))
+            image_path = Config.BONDS_IMAGE_PATH if category == 'markets' else Config.NEWS_IMAGE_PATH
             
             # Mensaje profesional
-            message = self._format_professional_news_message(news, bool(image_url))
+            message = self._format_professional_news_message(news, bool(image_path))
             
             if self.telegram and not dry_run:
                 try:
@@ -338,15 +314,15 @@ class TradingViewNewsService:
                         
                     def send_telegram():
                         if target_group:
-                            self.telegram.send_to_specific_group(message, target_group, image_url=image_url)
+                            self.telegram.send_to_specific_group(message, target_group, image_path=image_path)
                         else:
                             # Fallback
                             if category == 'markets':
-                                self.telegram.send_market_message(message, image_url=image_url)
+                                self.telegram.send_market_message(message, image_path=image_path)
                             elif category == 'signals':
-                                self.telegram.send_signal_message(message, image_url=image_url)
+                                self.telegram.send_signal_message(message, image_path=image_path)
                             else:
-                                self.telegram.send_crypto_message(message, image_url=image_url)
+                                self.telegram.send_crypto_message(message, image_path=image_path)
                                 
                     self._retry(send_telegram)
                 except Exception as e:
@@ -355,12 +331,19 @@ class TradingViewNewsService:
             # Twitter
             if self.twitter and not dry_run:
                 try:
-                    tweet_text = f"{'🪙' if category=='crypto' else '📈'} {title[:100]}...\n\n"
-                    tweet_text += f"{news['analysis'].get('summary', '')[:100]}...\n\n"
-                    tweet_text += f"🔗 {news['url']}\n"
-                    tweet_text += f"#Trading #News #{category}"
+                    emoji = '🪙' if category == 'crypto' else '📈' if category == 'markets' else '🎯'
+                    summary = news['analysis'].get('summary', '').strip()
+                    title = title.strip()
+                    suffix = f"#Trading #News #{category}"
+                    available = 280 - (len(title) + len(suffix) + 4 + len(emoji) + 1)
+                    if available < 0:
+                        max_title = 280 - (len(suffix) + 4 + len(emoji) + 1)
+                        title = title[:max(0, max_title)].rstrip()
+                        available = 280 - (len(title) + len(suffix) + 4 + len(emoji) + 1)
+                    summary = summary[:max(0, available)].rstrip()
+                    tweet_text = f"{emoji} {title}\n\n{summary}\n\n{suffix}".strip()
                     def send_twitter():
-                        ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_url, category="news")
+                        ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_path, category="news")
                         if not ok:
                             if getattr(self.twitter, "last_reason", None) == "duplicate":
                                 return False

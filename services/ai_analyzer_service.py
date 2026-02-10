@@ -1699,6 +1699,7 @@ IMPORTANTE:
         
         prompt = f"""Eres un experto analista de noticias financieras y criptomonedas.
 Analiza la siguiente lista de titulares de noticias y selecciona ÚNICAMENTE las más importantes y relevantes (impacto medio/alto en el mercado).
+Responde SIEMPRE en español, sin texto en inglés.
 
 LISTA DE NOTICIAS:
 {titles_formatted}

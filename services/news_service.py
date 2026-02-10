@@ -186,7 +186,7 @@ class NewsService:
             logger.debug(f"⚠️ Error guardando noticia en DB: {e}")
         
         # Siempre guardar en archivo local como respaldo
-        self._save_news_local(news['hash'], news)
+        self._save_news_local(news)
     
     def fetch_cryptopanic_news(self) -> List[Dict]:
         """
@@ -348,73 +348,6 @@ class NewsService:
         tickers = re.findall(r'\b[A-Z]{2,5}\b', title)
         return tickers[:3]  # Max 3
 
-    def _fetch_yahoo_finance_image(self, title: str, summary: str) -> Optional[str]:
-        """
-        Busca imagen relacionada con la noticia en Yahoo Finance.
-        Si no encuentra, retorna None.
-        """
-        try:
-            # Extraer símbolos/keywords del título
-            keywords = self._extract_keywords(title)
-            
-            # Buscar en Yahoo Finance
-            search_url = f"https://finance.yahoo.com/quote/{keywords[0]}" if keywords else None
-            
-            if search_url:
-                response = requests.get(search_url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-                if response.status_code == 200:
-                    # Búsqueda simple de og:image en el HTML
-                    # No usamos BeautifulSoup completo para evitar dependencia pesada si no está,
-                    # pero si está disponible mejor. Aquí usaremos regex simple.
-                    match = re.search(r'<meta property="og:image" content="([^"]+)"', response.text)
-                    if match:
-                        img_url = match.group(1)
-                        logger.info(f"✅ Imagen encontrada en Yahoo Finance: {keywords[0]}")
-                        return img_url
-            
-            logger.info("ℹ️ No se encontró imagen en Yahoo Finance")
-            return None
-            
-        except Exception as e:
-            logger.debug(f"⚠️ Error buscando imagen: {e}")
-            return None
-
-    def _download_yahoo_finance_image(self, image_url: str, title: str) -> Optional[str]:
-        """Descarga la imagen de alta calidad"""
-        try:
-            if not image_url:
-                return None
-                
-            response = requests.get(image_url, stream=True, timeout=10)
-            if response.status_code == 200:
-                # Sanitizar nombre
-                safe_title = re.sub(r'[^a-zA-Z0-9]', '_', title)[:50]
-                hash_name = hashlib.md5(title.encode()).hexdigest()[:8]
-                filename = f"news_img_{safe_title}_{hash_name}.jpg"
-                path = os.path.join(Config.TEMP_DIR or "temp", filename)
-                
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                
-                with open(path, 'wb') as f:
-                    for chunk in response.iter_content(1024):
-                        f.write(chunk)
-                
-                logger.info(f"✅ Imagen descargada: {path}")
-                return path
-            return None
-        except Exception as e:
-            logger.warning(f"⚠️ Error descargando imagen: {e}")
-            return None
-
-    def _fetch_yahoo_finance_image_enhanced(self, title: str) -> Optional[str]:
-        """Wrapper que busca y descarga la imagen"""
-        img_url = self._fetch_yahoo_finance_image(title, "") # Reuse existing logic
-        if img_url:
-             # Yahoo a veces da miniaturas, intentar obtener versión HQ si es posible
-             # Por ahora descargamos lo que hay
-             return self._download_yahoo_finance_image(img_url, title)
-        return None
-
     def _format_professional_news_message(self, news: dict, has_image: bool) -> str:
         """Formatea mensaje de noticia de forma profesional y atractiva"""
         category = news.get('category', 'crypto')
@@ -435,10 +368,7 @@ class NewsService:
         # Relevancia visual
         relevance_stars = "⭐" * min(score, 10)
         
-        # Mapeo de fuente
         source = news.get('source', 'Web')
-        if source == 'Google News':
-             source = 'Google News / ' + news.get('url', '')[:20] + '...'
         
         message = f"""{emoji_header} **NOTICIA {category.upper()}**
 
@@ -448,7 +378,7 @@ class NewsService:
 
 {'📊 Relevancia: ' + relevance_stars + f' ({score}/10)' if score > 0 else ''}
 
-🔗 Fuente: {source}"""
+Fuente: {source}"""
         
         return message.strip()
 
@@ -460,10 +390,9 @@ class NewsService:
         
         emoji = "🪙" if category == 'crypto' else "📈" if category == 'markets' else "📰"
         
-        # Título truncado inteligente
         max_title = 200
         if len(title) > max_title:
-            title = title[:max_title] + "..."
+            title = title[:max_title].rstrip()
         
         tweet = f"{emoji} {title}\n\n"
         
@@ -483,9 +412,8 @@ class NewsService:
             news: Diccionario con datos de la noticia
         """
         try:
-            # 0. Buscar imagen (Enhanced)
-            image_path = self._fetch_yahoo_finance_image_enhanced(news['title'])
-            
+            category = news.get('category', 'crypto').lower()
+            image_path = Config.BONDS_IMAGE_PATH if category == 'markets' else Config.NEWS_IMAGE_PATH
             # 1. Publicar en Twitter (usando path local)
             if self.twitter:
                 logger.info("📝 Publicando en Twitter...")
@@ -508,6 +436,7 @@ class NewsService:
                     logger.info(f"� Clasificación IA: {category} (confianza {classification.get('confidence', 0)}/10)")
                 
                 category = news.get('category', 'crypto').lower()
+                image_path = Config.BONDS_IMAGE_PATH if category == 'markets' else Config.NEWS_IMAGE_PATH
                 
                 # Definir grupo destino
                 target_group = None

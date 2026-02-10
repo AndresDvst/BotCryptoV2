@@ -17,6 +17,7 @@ from config.config import Config
 from utils.logger import logger
 from utils.browser_utils import BrowserManager
 from services.telegram_message_tester import TelegramMessageTester
+from services.twitter_engagement_service import TwitterEngagementService
 
 class BotManager:
     """Gestor de instancia única del orquestador"""
@@ -91,7 +92,7 @@ def run_complete_cycle(manager: BotManager):
     
     # 1. Análisis grande de crypto (112 monedas con cambios significativos)
     logger.info("\n📊 PASO 1/5: Análisis de criptomonedas con cambios significativos...")
-    manager.get_bot().run_analysis_cycle(is_morning=False)
+    manager.get_bot().run_analysis_cycle(is_morning=False, include_traditional_markets=False)
     
     # 2. Análisis exhaustivo de Top Monedas + LTC (mínimo 2 señales)
     logger.info("\n🎯 PASO 2/5: Análisis exhaustivo de Top Monedas + LTC...")
@@ -115,6 +116,27 @@ def run_complete_cycle(manager: BotManager):
     logger.info("\n🔄 PASO 5/5: Monitoreo de pumps/dumps...")
     manager.get_bot().price_monitor.run_monitoring_cycle_once()
     
+    # 6. Engagement en Twitter (después del monitoreo)
+    if getattr(Config, "TWITTER_ENGAGEMENT_ENABLED", False):
+        logger.info("\n🐦 PASO 6/6: Engagement en Twitter...")
+        try:
+            twitter_service = manager.get_bot().twitter
+            driver = getattr(twitter_service, "driver", None) if twitter_service else None
+            if driver:
+                engagement = TwitterEngagementService(
+                    driver=driver,
+                    ai_service=manager.get_bot().ai_analyzer,
+                    db=manager.get_bot().db
+                )
+                engagement.engage_with_feed(
+                    max_likes=Config.TWITTER_MAX_LIKES,
+                    max_comments=Config.TWITTER_MAX_COMMENTS
+                )
+            else:
+                logger.warning("⚠️ Driver de Twitter no disponible, omitiendo engagement")
+        except Exception as e:
+            logger.error(f"❌ Error en engagement de Twitter: {e}")
+
     logger.info("\n" + "=" * 60)
     logger.info("✅ CICLO COMPLETO FINALIZADO")
     logger.info("=" * 60)
@@ -319,6 +341,7 @@ def main():
                 MenuOption('16', '🧪 Prueba de Publicación en Twitter', '🧪', lambda m: subprocess.run([sys.executable, "tests/test_twitter.py"], cwd=os.getcwd())),
                 MenuOption('17', '🐦 Prueba de Engagement en Twitter (Likes + Comments)', '🐦', lambda m: subprocess.run([sys.executable, "tests/test_twitter_engagement.py"], cwd=os.getcwd())),
                 MenuOption('18', '🤖 Prueba de Conexión IA (HuggingFace/OpenRouter/Gemini)', '🤖', lambda m: subprocess.run([sys.executable, "tests/test_ai_connection.py"], cwd=os.getcwd())),
+                MenuOption('19', '🧹 Limpiar historiales (tweets, señales, stats, noticias)', '🧹', lambda m: clear_history_files(m)),
             ]
             for opt in options:
                 print(f"{opt.number}. {opt.label}")
@@ -363,6 +386,30 @@ def main():
         except Exception:
             pass
         logger.info("\n👋 ¡Hasta pronto!")
+
+def clear_history_files(manager: BotManager):
+    base_dir = os.getcwd()
+    files = [
+        "tweet_history.json",
+        "traditional_signals_history.json",
+        "stats_history.json",
+        "signals_history.json",
+        "news_history.json",
+        "last_publication.json"
+    ]
+    removed = 0
+    for name in files:
+        path = os.path.join(base_dir, name)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed += 1
+                logger.info(f"🗑️ Eliminado: {name}")
+            else:
+                logger.info(f"ℹ️ No existe: {name}")
+        except Exception as e:
+            logger.error(f"❌ Error eliminando {name}: {e}")
+    logger.info(f"✅ Limpieza completada: {removed}/{len(files)} archivos")
 
 if __name__ == "__main__":
     main()
