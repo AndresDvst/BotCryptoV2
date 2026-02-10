@@ -214,9 +214,10 @@ Responde en JSON:
     def validate_configuration(self) -> Dict[str, bool]:
         """Valida la configuración de API keys."""
         logger.info("\n🔍 VALIDANDO CONFIGURACIÓN...")
-        
+        ollama_host = Config.get_ollama_host() if hasattr(Config, "get_ollama_host") else getattr(Config, "OLLAMA_HOST", "")
+        ollama_models = getattr(Config, "OLLAMA_MODELS", [])
         config_status = {
-            "Ollama": bool(Config.OLLAMA_HOST),
+            "Ollama": bool(ollama_host) and bool(ollama_models),
             "Gemini": bool(Config.GOOGLE_GEMINI_API_KEY),
             "OpenRouter": bool(Config.OPENROUTER_API_KEY),
             "HuggingFace": bool(Config.HUGGINGFACE_API_KEY),

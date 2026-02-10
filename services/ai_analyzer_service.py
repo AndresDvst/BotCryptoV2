@@ -107,8 +107,7 @@ class AIAnalyzerService:
         self._last_success_model: Optional[str] = None
         self._gemini_model_cache: Optional[str] = None
         
-        # Configurar Ollama
-        # ✅ CORREGIDO: Usar método de Config para auto-detectar VPS
+        # ========== CONFIGURACIÓN MEJORADA DE OLLAMA (3 MODELOS) ==========
         try:
             ollama_host_raw = Config.get_ollama_host() if hasattr(Config, 'get_ollama_host') else getattr(Config, "OLLAMA_HOST", "")
         except:
@@ -117,22 +116,38 @@ class AIAnalyzerService:
         env_ollama_host_raw = getattr(Config, "OLLAMA_HOST", "") or ""
         candidate = self._format_ollama_host(ollama_host_raw)
         env_candidate = self._format_ollama_host(env_ollama_host_raw)
+
         if candidate == "http://localhost:11434" and env_candidate and env_candidate != candidate:
             if not self._quick_ollama_ping(candidate):
                 candidate = env_candidate
+
         self.ollama_host = candidate
-        self.ollama_model: str = getattr(Config, "OLLAMA_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
+        self.ollama_models = getattr(Config, "OLLAMA_MODELS", [
+            {'id': 'qwen2.5:7b', 'name': 'Qwen 2.5 7B', 'priority': 1, 'context_limit': 32768, 'use_case': 'general'},
+            {'id': 'deepseek-coder:6.7b', 'name': 'DeepSeek Coder 6.7B', 'priority': 2, 'context_limit': 16384, 'use_case': 'code'},
+            {'id': 'llama3.2:3b', 'name': 'Llama 3.2 3B', 'priority': 3, 'context_limit': 8192, 'use_case': 'fast'}
+        ])
+        default_model = getattr(Config, "OLLAMA_DEFAULT_MODEL", None) or getattr(Config, "OLLAMA_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
+        model_ids = [m.get("id") for m in self.ollama_models if isinstance(m, dict) and m.get("id")]
+        if default_model in model_ids:
+            self.ollama_current_model_index = model_ids.index(default_model)
+            self.ollama_model = default_model
+        else:
+            self.ollama_current_model_index = 0
+            self.ollama_model = model_ids[0] if model_ids else default_model
         self._ollama_health_cache_seconds: int = int(getattr(Config, "OLLAMA_HEALTH_CACHE_SECONDS", 60) or 60)
         self._ollama_health_last_ts: float = 0.0
         self._ollama_health_last_ok: bool = False
-        
+
         if self.ollama_host:
             self._providers["ollama"] = "ollama"
-            logger.info(f"🦙 Ollama configurado: {self.ollama_host} (modelo={self.ollama_model})")
-            # Detectar si estamos en VPS
+            logger.info(f"🦙 Ollama configurado: {self.ollama_host}")
+            logger.info(f"   📦 Modelos disponibles: {len(self.ollama_models)}")
+            for model in self.ollama_models:
+                logger.info(f"      - {model['name']} (prioridad: {model['priority']}, {model['use_case']})")
             is_vps = getattr(Config, "IS_VPS", False) or (getattr(Config, "IS_LINUX", False) and not getattr(Config, "IS_DOCKER", False))
             if is_vps:
-                logger.info("   📍 Detectado VPS/Linux - usando Ollama local")
+                logger.info("   📍 Detectado VPS/Linux - usando Ollama local como PRIMARIO")
 
         # Configurar Gemini
         try:
@@ -460,20 +475,21 @@ class AIAnalyzerService:
             h = f"http://{h}"
         return h.rstrip("/")
 
-    def _call_ollama(self, prompt: str, max_tokens: int, allow_short: bool = False) -> str:
+    def _call_ollama(self, prompt: str, max_tokens: int, allow_short: bool = False, model_id: Optional[str] = None) -> str:
         """Llama a Ollama para generar texto."""
         host = self._format_ollama_host(self.ollama_host)
         if not host:
             raise RuntimeError("Ollama no configurado")
+        model_to_use = model_id if model_id else self.ollama_model
         payload: Dict[str, Any] = {
-            "model": self.ollama_model,
+            "model": model_to_use,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {"num_predict": max(1, int(max_tokens))},
         }
         resp = requests.post(f"{host}/api/chat", json=payload, timeout=self._http_timeout)
         if resp.status_code != 200:
-            raise RuntimeError(f"Ollama falló (HTTP {resp.status_code})")
+            raise RuntimeError(f"Ollama falló (HTTP {resp.status_code}) con modelo {model_to_use}")
         data = resp.json() or {}
         text = ""
         msg = data.get("message")
@@ -482,7 +498,7 @@ class AIAnalyzerService:
         if not text and isinstance(data.get("response"), str):
             text = data.get("response") or ""
         if not text and not allow_short:
-            raise RuntimeError("Respuesta vacía de Ollama")
+            raise RuntimeError(f"Respuesta vacía de Ollama (modelo: {model_to_use})")
         return text
 
     def _quick_ollama_ping(self, host: str) -> bool:
@@ -531,7 +547,8 @@ class AIAnalyzerService:
         """Obtiene lista priorizada de proveedores disponibles."""
         available: List[str] = []
         if self._ollama_health_ok():
-            available.append("ollama")
+            for i in range(len(getattr(self, "ollama_models", []))):
+                available.append(f"ollama_{i}")
         if self.gemini_client:
             available.append("gemini")
         if self.openrouter_client:
@@ -554,7 +571,7 @@ class AIAnalyzerService:
             providers.append(active)
         
         # Luego orden por defecto
-        default_order = ["ollama", "gemini", "openrouter", "huggingface"]
+        default_order = [f"ollama_{i}" for i in range(len(getattr(self, "ollama_models", [])))] + ["gemini", "openrouter", "huggingface"]
         providers.extend(p for p in default_order if p in available and p not in providers)
         providers.extend(p for p in available if p not in providers)
         return providers
@@ -576,6 +593,24 @@ class AIAnalyzerService:
             self._metrics["requests"][provider] += 1
 
         def _call() -> Tuple[str, str]:
+            if provider.startswith("ollama_"):
+                if not self.ollama_host:
+                    raise RuntimeError("Ollama no configurado")
+                try:
+                    model_index = int(provider.split("_")[1])
+                    model_config = self.ollama_models[model_index]
+                except (IndexError, ValueError):
+                    raise RuntimeError(f"Índice de modelo Ollama inválido: {provider}")
+                model_id = model_config['id']
+                model_name = model_config['name']
+                logger.info(f"🦙 Probando Ollama: {model_name}")
+                text = self._call_ollama(prompt, max_tokens=max_tokens, allow_short=False, model_id=model_id)
+                with self._state_lock:
+                    self.ollama_current_model_index = model_index
+                    self.ollama_model = model_id
+                logger.info(f"✅ Éxito con Ollama: {model_name}")
+                return text, model_name
+
             if provider == "gemini":
                 if not self.gemini_client:
                     raise RuntimeError("Gemini no configurado")
@@ -860,7 +895,13 @@ class AIAnalyzerService:
         if not self.ollama_host:
             return RuntimeError("Ollama no configurado")
         try:
-            _ = self._call_ollama("Hola", max_tokens=8, allow_short=True)
+            model_id = self.ollama_model
+            if getattr(self, "ollama_models", None):
+                if 0 <= self.ollama_current_model_index < len(self.ollama_models):
+                    model_id = self.ollama_models[self.ollama_current_model_index].get("id", model_id)
+                else:
+                    model_id = self.ollama_models[0].get("id", model_id)
+            _ = self._call_ollama("Hola", max_tokens=8, allow_short=True, model_id=model_id)
             return True
         except Exception as e:
             return e
@@ -900,7 +941,9 @@ class AIAnalyzerService:
             if self._ollama_health_ok():
                 result = self._run_with_timeout(self._test_ollama, timeout_seconds=6)
                 if result is True:
-                    self._record_success("ollama", self.ollama_model)
+                    model_index = self.ollama_current_model_index if getattr(self, "ollama_models", None) else 0
+                    provider_key = f"ollama_{model_index}" if getattr(self, "ollama_models", None) else "ollama"
+                    self._record_success(provider_key, self.ollama_model)
                     logger.info(f"✅ Proveedor activo: Ollama (modelo={self.ollama_model})")
                     return
                 if isinstance(result, Exception):
@@ -1793,8 +1836,15 @@ Responde SOLO con JSON:
     def get_stats(self) -> Dict[str, Dict[str, Any]]:
         """Obtiene estadísticas de uso de proveedores."""
         stats: Dict[str, Dict[str, Any]] = {}
-        for provider in ("ollama", "gemini", "openrouter", "huggingface"):
-            if provider in self._providers:
+        providers: List[str] = []
+        for i in range(len(getattr(self, "ollama_models", []))):
+            providers.append(f"ollama_{i}")
+        providers.extend(["ollama", "gemini", "openrouter", "huggingface"])
+        for provider in self._metrics["requests"].keys():
+            if provider not in providers:
+                providers.append(provider)
+        for provider in providers:
+            if provider in self._providers or provider in self._metrics["requests"]:
                 with self._state_lock:
                     requests = self._metrics["requests"][provider]
                     failures = self._metrics["failures"][provider]

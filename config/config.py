@@ -117,6 +117,45 @@ class Config:
         # Windows: usar del .env o default
         CHROMEDRIVER_PATH = _env_chromedriver or os.path.join(BASE_DIR, 'utils', 'chromedriver.exe')
     
+    # ========== OLLAMA ==========
+    _env_ollama_host = os.getenv('OLLAMA_HOST', '').strip()
+    if IS_VPS:
+        OLLAMA_HOST = "http://localhost:11434"
+    elif _env_ollama_host:
+        OLLAMA_HOST = _env_ollama_host
+    else:
+        OLLAMA_HOST = "http://localhost:11434"
+    OLLAMA_MODELS = [
+        {
+            'id': 'qwen2.5:7b',
+            'name': 'Qwen 2.5 7B',
+            'priority': 1,
+            'context_limit': 32768,
+            'use_case': 'general',
+            'description': 'Modelo principal para análisis general'
+        },
+        {
+            'id': 'deepseek-coder:6.7b',
+            'name': 'DeepSeek Coder 6.7B',
+            'priority': 2,
+            'context_limit': 16384,
+            'use_case': 'code',
+            'description': 'Especializado en análisis técnico y código'
+        },
+        {
+            'id': 'llama3.2:3b',
+            'name': 'Llama 3.2 3B',
+            'priority': 3,
+            'context_limit': 8192,
+            'use_case': 'fast',
+            'description': 'Modelo rápido para respuestas simples'
+        }
+    ]
+    OLLAMA_DEFAULT_MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b')
+    OLLAMA_MODEL = OLLAMA_DEFAULT_MODEL
+    OLLAMA_HEALTH_CACHE_SECONDS = int(os.getenv('OLLAMA_HEALTH_CACHE_SECONDS', '60'))
+    OLLAMA_PREFER_LOCAL_ON_LINUX = os.getenv('OLLAMA_PREFER_LOCAL_ON_LINUX', 'true').lower() in ('1', 'true', 'yes')
+    
     # ========== GOOGLE GEMINI ==========
     GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
     
@@ -132,13 +171,6 @@ class Config:
     
     # ========== OPENROUTER ==========
     OPENROUTER_API_KEY = os.getenv('GOOGLE_OPENROUTER_API_KEY') or os.getenv('OPENROUTER_API_KEY')
-    
-    # ========== OLLAMA ==========
-    # ✅ CORREGIDO: Auto-detección de Ollama local en VPS
-    OLLAMA_HOST = os.getenv('OLLAMA_HOST', '')
-    OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b')
-    OLLAMA_HEALTH_CACHE_SECONDS = int(os.getenv('OLLAMA_HEALTH_CACHE_SECONDS', '60'))
-    OLLAMA_PREFER_LOCAL_ON_LINUX = os.getenv('OLLAMA_PREFER_LOCAL_ON_LINUX', 'true').lower() in ('1', 'true', 'yes')
     
     # ========== CONFIGURACIÓN DEL BOT ==========
     MIN_CHANGE_PERCENT = float(os.getenv('MIN_CHANGE_PERCENT', '10'))
@@ -387,24 +419,18 @@ class Config:
         """
         env_host = (cls.OLLAMA_HOST or "").strip()
     
-        # Si estamos en VPS y preferimos local
-        if cls.IS_VPS and cls.OLLAMA_PREFER_LOCAL_ON_LINUX:
-            return "http://localhost:11434"
+        if cls.IS_VPS:
+            env_host = "http://localhost:11434"
+        elif not env_host:
+            env_host = "http://localhost:11434"
     
-        # Si hay host en .env, usarlo
-        if env_host:
-            # Limpiar duplicaciones de protocolo
-            while any(env_host.startswith(dup) for dup in ["http://http://", "https://https://"]):
-                env_host = env_host.replace("http://http://", "http://", 1).replace("https://https://", "https://", 1)
-        
-            # Agregar protocolo si falta
-            if not env_host.startswith(("http://", "https://")):
-                env_host = f"http://{env_host}"
-        
-            return env_host.rstrip("/")
+        while any(env_host.startswith(dup) for dup in ["http://http://", "https://https://"]):
+            env_host = env_host.replace("http://http://", "http://", 1).replace("https://https://", "https://", 1)
     
-        # Default: no configurado
-        return ""
+        if not env_host.startswith(("http://", "https://")):
+            env_host = f"http://{env_host}"
+    
+        return env_host.rstrip("/")
 
     @classmethod
     def validate(cls):
