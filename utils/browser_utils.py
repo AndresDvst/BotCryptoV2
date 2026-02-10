@@ -1,174 +1,131 @@
 import os
 import sys
-import subprocess
-import re
-import tempfile
-from typing import Optional, Tuple
+import shutil
+import time
+from typing import Optional
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from config.config import Config
 from utils.logger import logger
-
-def get_major_version(path: str) -> Tuple[Optional[int], str]:
-    """Obtiene la versión mayor de un ejecutable (Chrome o Driver)"""
-    try:
-        # En Windows a veces --version no funciona bien con algunos exes, pero intentamos
-        result = subprocess.run([path, '--version'], capture_output=True, text=True, check=False)
-        text = (result.stdout or '') + (result.stderr or '')
-        # Patrón típico: "Google Chrome 114.0.5735.90" o "ChromeDriver 114.0.5735.90"
-        m = re.search(r'(\d+)\.', text)
-        if m:
-            return int(m.group(1)), text.strip()
-    except Exception:
-        pass
-    
-    # Fallback para intentar leer propiedades si es windows (mas complejo, skip por ahora)
-    return None, ""
 
 class BrowserManager:
     """
-    Gestor centralizado para la inicialización del navegador Chrome.
-    Asegura el uso de rutas configuradas y perfiles persistentes.
+    Gestor simplificado y robusto para VPS Azure (Ubuntu).
+    Permite modo Headless (automático) y Gráfico (manual).
     """
 
     @staticmethod
-    def get_driver(headless: bool = False) -> Optional[webdriver.Chrome]:
+    def get_driver(headless: bool = True) -> Optional[webdriver.Chrome]:
         """
-        Inicializa y retorna una instancia de Chrome Driver configurada.
+        Inicializa Chrome.
+        Si headless=True -> Modo servidor (invisible, estable).
+        Si headless=False -> Modo ventana (visible, requiere NoMachine).
         """
         try:
+            # 1. Limpieza preventiva de bloqueos (SingletonLock)
+            profile_path = "/home/AndresDvst/BotCryptoV2/chrome_profile"
+            lock_file = os.path.join(profile_path, "SingletonLock")
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                    logger.info("🧹 SingletonLock eliminado correctamente.")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo borrar SingletonLock: {e}")
+
+            # 2. Configurar Opciones
             options = Options()
             
-            # --- Detectar si estamos en Docker/Linux ---
-            is_docker = os.path.exists('/.dockerenv') or os.environ.get('IS_DOCKER', '').lower() == 'true'
-            is_linux = sys.platform.startswith('linux')
-            
-            # --- Configuración Base ---
+            # --- RUTAS HARDCODED ---
+            options.binary_location = "/opt/google/chrome/google-chrome"
+            driver_path = "/usr/bin/chromedriver"
+
+            # --- BANDERAS BASES ---
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
-            options.add_argument('--disable-software-rasterizer')
+            options.add_argument('--remote-debugging-port=9222')
             
-            # --- Opciones adicionales para Docker/Linux ---
-            if is_docker or is_linux:
-                # Configurar DISPLAY para Xvfb
-                display = os.environ.get('DISPLAY', ':99')
-                os.environ['DISPLAY'] = display
-                logger.info(f"🖥️ DISPLAY configurado: {display}")
-                
-                # Opciones críticas para Docker
-                options.add_argument('--disable-setuid-sandbox')
-                options.add_argument('--disable-extensions')
-                options.add_argument('--disable-background-networking')
-                options.add_argument('--disable-default-apps')
-                options.add_argument('--disable-sync')
-                options.add_argument('--disable-translate')
-                options.add_argument('--no-first-run')
-                options.add_argument('--no-default-browser-check')
-                options.add_argument('--disable-crash-reporter')
-                options.add_argument('--disable-infobars')
-                options.add_argument('--disable-features=VizDisplayCompositor')
-                options.add_argument('--window-size=1920,1080')
-                options.add_argument('--disable-hang-monitor')
-                options.add_argument('--disable-prompt-on-repost')
-                options.add_argument('--disable-domain-reliability')
-                options.add_argument('--disable-component-update')
-                # Remote debugging solo si no estamos en headless
-                if not headless:
-                    options.add_argument('--remote-debugging-port=9222')
-            else:
-                options.add_argument('--remote-debugging-port=9222')
-            
-            # Headless según argumento o Config, pero el argumento tiene precedencia si es True
-            config_headless = getattr(Config, 'TWITTER_HEADLESS', False)
-            if headless or config_headless:
+            # --- LÓGICA DE VISIBILIDAD ---
+            if headless:
+                logger.info("👻 Iniciando Chrome en modo HEADLESS (Oculto)")
                 options.add_argument('--headless=new')
             else:
+                logger.info("📺 Iniciando Chrome en modo GUI (Visible)")
                 options.add_argument('--start-maximized')
+                # Importante: Si estás por SSH puro, esto fallará. 
+                # Debes configurar el DISPLAY si no lo detecta solo.
+                if not os.environ.get('DISPLAY'):
+                    os.environ['DISPLAY'] = ':0' 
 
-            # --- Flags de Estabilidad y Anti-Detección Básica ---
+            # --- PERFIL DE USUARIO ---
+            options.add_argument(f'--user-data-dir={profile_path}')
+
+            # --- EXTRAS ANTIDETECCIÓN ---
+            options.add_argument('--window-size=1920,1080')
             options.add_argument('--disable-blink-features=AutomationControlled')
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option('useAutomationExtension', False)
-            options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-            
-            # --- Perfil de Usuario (PERSISTENTE) ---
-            # Obtener ruta del perfil desde Config o usar default según OS
-            profile_root = getattr(Config, 'CHROME_USER_DATA_DIR', None)
-            
-            if not profile_root:
-                if is_linux:
-                    # En Linux, usar directorio en home del usuario
-                    home = os.path.expanduser('~')
-                    profile_root = os.path.join(home, '.config', 'cryptobot_chrome_profile')
-                else:
-                    # En Windows, usar directorio en el proyecto
-                    profile_root = os.path.join(os.getcwd(), 'chrome_profile')
-            
-            # Asegurar ruta absoluta
-            profile_root = os.path.abspath(profile_root)
-            
-            # Crear directorio si no existe
-            if not os.path.exists(profile_root):
-                try:
-                    os.makedirs(profile_root, exist_ok=True)
-                    logger.info(f"📁 Directorio de perfil creado: {profile_root}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Error creando directorio de perfil: {e}")
-            
-            options.add_argument(f'--user-data-dir={profile_root}')
-            logger.info(f"🔑 Usando perfil de Chrome: {profile_root}")
+            options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-            # --- Binario de Chrome ---
-            chrome_binary = getattr(Config, 'CHROME_BINARY_PATH', None)
-            if chrome_binary and os.path.isfile(chrome_binary):
-                options.binary_location = chrome_binary
-                logger.info(f"🔍 Usando binario Chrome: {chrome_binary}")
-            else:
-                logger.warning("⚠️ CHROME_BINARY_PATH no definido o no encontrado. Se usará el del sistema.")
-
-            # --- Driver ---
-            driver_path = getattr(Config, 'CHROMEDRIVER_PATH', None) or os.getenv('CHROMEDRIVER_PATH')
+            # 3. Inicializar Servicio
+            service = Service(executable_path=driver_path, log_path="chromedriver.log", verbose=True)
             
-            if driver_path and os.path.isfile(driver_path):
-                logger.info(f"🔧 Usando chromedriver desde CONFIG: {driver_path}")
-            else:
-                logger.warning("⚠️ CHROMEDRIVER_PATH no válido. Intentando descargar con webdriver-manager...")
-                try:
-                    driver_path = ChromeDriverManager().install()
-                    logger.info(f"🔧 Driver descargado en: {driver_path}")
-                except Exception as e:
-                    logger.error(f"❌ Error descargando driver: {e}")
-                    return None
-
-            # --- Servicio ---
-            # Suprimir logs basura del driver
-            log_path = os.devnull
-            service = Service(driver_path, log_path="chromedriver.log", verbose=True)
-            
-            if sys.platform == 'win32':
-                # Ocultar ventana de consola del driver
-                try:
-                    service.creation_flags = subprocess.CREATE_NO_WINDOW
-                except Exception:
-                    pass
-
             driver = webdriver.Chrome(service=service, options=options)
 
-            # --- Anti-deteccion CDP (CRITICO para Twitter) ---
+            # 4. Parche CDP para Twitter
             try:
                 driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                    "source": """Object.defineProperty(navigator, "webdriver", {get: () => undefined});"""
+                    "source": """
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        });
+                    """
                 })
-                logger.debug("Anti-deteccion CDP configurada")
-            except Exception as e:
-                logger.warning(f"No se pudo configurar anti-deteccion CDP: {e}")
+            except Exception:
+                pass
+
             return driver
 
         except Exception as e:
-            logger.error(f"❌ Error CRÍTICO al inicializar Chrome Driver: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"❌ Error al inicializar Chrome Driver: {e}")
             return None
+
+
+    @staticmethod
+    def open_manual_login(*args, **kwargs):
+        """
+        Abre el navegador en modo gráfico para que el usuario se loguee manualmente.
+        """
+        logger.info("🔵 Abriendo navegador para inicio de sesión manual...")
+        logger.info("⚠️ NOTA: Debes estar viendo el escritorio remoto (NoMachine) para ver la ventana.")
+        
+        # AQUÍ ESTÁ LA CLAVE: Pedimos headless=False
+        driver = BrowserManager.get_driver(headless=False)
+        
+        if not driver:
+            logger.error("❌ No se pudo abrir el navegador. Verifica que estás en un entorno gráfico.")
+            return
+
+        try:
+            logger.info("🌐 Navegando a Twitter Login...")
+            driver.get("https://twitter.com/i/flow/login")
+            
+            print("\n" + "="*50)
+            print("   🟢 EL NAVEGADOR DEBERÍA ESTAR ABIERTO AHORA")
+            print("   1. Busca la ventana de Chrome en tu escritorio remoto.")
+            print("   2. Inicia sesión manualmente en Twitter.")
+            print("   3. Cuando termines y veas tu timeline, vuelve aquí.")
+            print("="*50 + "\n")
+            
+            # Usamos input para pausar el script hasta que tú digas
+            input("⌨️ Presiona ENTER aquí cuando hayas terminado de loguearte...")
+            
+            logger.info("💾 Guardando cookies y cerrando...")
+            time.sleep(2)
+            
+        except Exception as e:
+            logger.error(f"❌ Error durante el proceso manual: {e}")
+        finally:
+            if driver:
+                driver.quit()
+                logger.info("✅ Navegador cerrado.")
