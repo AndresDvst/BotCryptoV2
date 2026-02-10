@@ -93,7 +93,7 @@ sudo apt install -y python3.11 python3.11-venv python3.11-dev
 
 # Clonar el proyecto
 cd ~
-git clone https://github.com/TU_USUARIO/BotCryptoV2.git
+git clone https://github.com/AndresDvst/BotCryptoV2.git
 cd BotCryptoV2
 
 # Crear entorno virtual
@@ -105,6 +105,9 @@ pip install -r requirements.txt
 ```
 
 ## Paso 7: Instalar Chrome y ChromeDriver
+
+sudo apt update
+sudo apt install -y unzip
 
 ```bash
 # Instalar Chrome

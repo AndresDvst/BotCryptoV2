@@ -442,20 +442,6 @@ class AIAnalyzerService:
         
         text, model = result
         return str(text), model
-                        text = self._call_huggingface_model(client, mid, alt, prompt, max_tokens=8).strip()
-                        if text:
-                            return alt
-                    except Exception:
-                        return None
-                if any(kw in s for kw in ["402", "payment", "billing", "401", "unauthorized", "403", "forbidden", "gated", "404", "not found"]):
-                    return None
-                if "429" in s or "rate limit" in s:
-                    time.sleep(1)
-                    return None
-                if "503" in s or "loading" in s:
-                    return None
-                return None
-            return None
 
         limit = min(len(model_ids), self.config.HF_VALIDATE_MAX_CANDIDATES)
         for mid in model_ids[:limit]:
