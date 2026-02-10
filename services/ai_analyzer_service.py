@@ -1699,7 +1699,7 @@ IMPORTANTE:
         
         prompt = f"""Eres un experto analista de noticias financieras y criptomonedas.
 Analiza la siguiente lista de titulares de noticias y selecciona ÚNICAMENTE las más importantes y relevantes (impacto medio/alto en el mercado).
-Responde SIEMPRE en español, sin texto en inglés.
+Responde SIEMPRE en español. Si el titular está en inglés, TRADÚCELO AL ESPAÑOL.
 
 LISTA DE NOTICIAS:
 {titles_formatted}
@@ -1708,17 +1708,21 @@ INSTRUCCIONES:
 1. Ignora noticias irrelevantes, spam, o de bajo impacto.
 2. Selecciona las noticias con score de relevancia >= 7 sobre 10.
 3. Clasifica cada noticia en: 'crypto' (general), 'markets' (bolsa/forex/macro), 'signals' (señales de trading específicas).
-4. Traduce el título al español y devuélvelo en el campo "title_es". Si ya está en español, copia el mismo texto.
-5. Devuelve el resultado en formato JSON puro (sin markdown).
+4. OBLIGATORIO: Genera un campo "title_es" con el título traducido al español. NO DEJES EL TÍTULO EN INGLÉS.
+5. Genera un "summary" de máximo 3 frases cortas que complementen el título con detalles clave.
+   - REGLA CRÍTICA: El resumen NO debe empezar repitiendo el título; debe aportar información nueva.
+   - Longitud máxima del resumen: 130 caracteres (para ajustar a Twitter).
+   - Estilo: Informativo, directo y sin relleno.
+6. Devuelve el resultado en formato JSON puro (sin markdown).
 
 FORMATO DE RESPUESTA JSON (Lista de objetos):
 [
   {{
     "original_index": <número del índice original en la lista>,
     "score": <número 7-10>,
-    "summary": "<Resumen de 1 linea en español>",
+    "summary": "<Resumen de 3 frases cortas complementarias (NO repetir título)>",
     "category": "<crypto|markets|signals>",
-    "title_es": "<Título traducido al español>"
+    "title_es": "<TÍTULO TRADUCIDO AL ESPAÑOL>"
   }},
   ...
 ]
@@ -1754,7 +1758,8 @@ Noticia: {text}
 Responde SOLO con un JSON en este formato:
 {{
     "score": <número del 0 al 10>,
-    "summary": "<resumen breve en 1 línea>"
+    "summary": "<resumen de 3 frases cortas complementarias (NO repetir título) en ESPAÑOL>",
+    "title_es": "<título traducido al ESPAÑOL>"
 }}
             
 Criterios:
@@ -1762,7 +1767,9 @@ Criterios:
 - 7-9: Noticia muy relevante (movimientos significativos, anuncios importantes)
 - 4-6: Noticia moderadamente interesante
 - 1-3: Noticia poco relevante
-- 0: Spam o irrelevante"""
+- 0: Spam o irrelevante
+- OBLIGATORIO: El campo "title_es" debe contener el título traducido al español. NO devolver en inglés.
+- OBLIGATORIO: El "summary" debe tener máximo 3 frases cortas que complementen el título sin repetirlo, máximo 130 caracteres."""
 
             result_text, _ = self._call_with_fallback_robust(prompt, max_tokens=512)
             if not result_text:
@@ -1774,6 +1781,7 @@ Criterios:
 
             score_raw = parsed.get("score", 5)
             summary_raw = parsed.get("summary", text[:100])
+            title_es_raw = parsed.get("title_es", "")
 
             try:
                 score = int(score_raw)
@@ -1782,8 +1790,9 @@ Criterios:
 
             score = max(0, min(score, 10))
             summary = str(summary_raw) if summary_raw is not None else text[:100]
+            title_es = str(title_es_raw) if title_es_raw else ""
 
-            return {"score": score, "summary": summary}
+            return {"score": score, "summary": summary, "title_es": title_es}
 
         except Exception as e:
             if not self._is_quota_error(e):

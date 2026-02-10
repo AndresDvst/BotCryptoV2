@@ -324,16 +324,19 @@ class NewsService:
             if cached:
                 news['relevance_score'] = int(cached.get('score', 5))
                 news['summary'] = str(cached.get('summary', news['title'][:100]))
+                news['title_es'] = str(cached.get('title_es', '')).strip()
                 return news if news['relevance_score'] >= self.min_relevance_score else None
 
             analysis = self.ai_analyzer.analyze_text(news['title'])
             score = int(analysis.get('score', 5))
             summary = str(analysis.get('summary', news['title'][:100]))
+            title_es = str(analysis.get('title_es', '')).strip()
             score = max(1, min(10, score))
 
             news['relevance_score'] = score
             news['summary'] = summary
-            self._set_ai_cached(news['hash'], {'score': score, 'summary': summary}, self._ai_cache_ttl)
+            news['title_es'] = title_es
+            self._set_ai_cached(news['hash'], {'score': score, 'summary': summary, 'title_es': title_es}, self._ai_cache_ttl)
 
             logger.info(f"📊 Relevancia: {score}/10 - {news['title'][:50]}...")
             return news if score >= self.min_relevance_score else None
@@ -348,11 +351,30 @@ class NewsService:
         tickers = re.findall(r'\b[A-Z]{2,5}\b', title)
         return tickers[:3]  # Max 3
 
+    def _dedupe_summary(self, title: str, summary: str) -> str:
+        if not title or not summary:
+            return summary
+        import re
+        # Regex case-insensitive para eliminar título al inicio
+        pattern = re.compile(r'^' + re.escape(title), re.IGNORECASE)
+        if pattern.match(summary):
+            return pattern.sub("", summary, count=1).strip(" -—:;.,")
+        
+        # Fallback para repeticiones internas obvias
+        if title.lower() in summary.lower() and len(summary) < len(title) * 2.5:
+             return pattern.sub("", summary).strip(" -—:;.,")
+        return summary
+
     def _format_professional_news_message(self, news: dict, has_image: bool) -> str:
         """Formatea mensaje de noticia de forma profesional y atractiva"""
         category = news.get('category', 'crypto')
-        title = news.get('title', '')
+        title_es = news.get('title_es', '').strip()
+        title = title_es if title_es else news.get('title', '')
         summary = news.get('summary', '')
+        
+        # Limpiar duplicados en resumen
+        summary = self._dedupe_summary(title, summary)
+        
         score = news.get('relevance_score', 0)
         
         # Emoji según categoría
@@ -385,8 +407,17 @@ Fuente: {source}"""
     def _format_twitter_news(self, news: dict) -> str:
         """Formatea para Twitter (max 280 chars) de forma atractiva"""
         category = news.get('category', 'crypto')
-        title = news.get('title', '')
+        title_es = news.get('title_es', '').strip()
+        title = title_es if title_es else news.get('title', '')
         score = news.get('relevance_score', 0)
+        
+        # Dedupe title from summary if summary used (currently not used in this format, but good practice)
+        # In this specific function, we don't include summary, only Title + Source.
+        # But wait, original code was:
+        # tweet = f"{emoji} {title}\n\n"
+        # ...
+        # tweet += f"📍 Fuente: {news.get('source', 'Web')}"
+        # So no summary here. No dedupe needed for Twitter format as implemented here.
         
         emoji = "🪙" if category == 'crypto' else "📈" if category == 'markets' else "📰"
         
@@ -402,7 +433,12 @@ Fuente: {source}"""
         
         tweet += f"📍 Fuente: {news.get('source', 'Web')}"
         
-        return tweet[:280]
+        # Ensure space at end
+        final_tweet = tweet[:280]
+        if not final_tweet.endswith(" "):
+            final_tweet += " "
+            
+        return final_tweet
 
     def publish_news(self, news: Dict):
         """

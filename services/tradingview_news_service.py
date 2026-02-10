@@ -272,17 +272,26 @@ class TradingViewNewsService:
     def _normalize_title(self, title: str) -> str:
         if not title:
             return ""
-        cleaned = re.sub(r"^\s*TradingView\s+[A-Za-z0-9/\-_.]+:\s*", "", title, flags=re.IGNORECASE)
+        # Improved regex to handle various TradingView prefixes
+        cleaned = re.sub(r"^\s*TradingView\s+[^:]+:\s*", "", title, flags=re.IGNORECASE)
         cleaned = re.sub(r"^\s*TradingView\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
 
     def _dedupe_summary(self, title: str, summary: str) -> str:
         if not title or not summary:
             return summary
-        title_norm = title.lower().strip()
-        summary_norm = summary.lower()
-        if title_norm and title_norm in summary_norm:
-            return summary.replace(title, "").strip(" -—:;.,")
+        # Usar regex case-insensitive para eliminar el título si aparece al inicio del resumen
+        import re
+        # Escapar caracteres especiales del título
+        pattern = re.compile(r'^' + re.escape(title), re.IGNORECASE)
+        if pattern.match(summary):
+            return pattern.sub("", summary, count=1).strip(" -—:;.,")
+        
+        # Fallback: chequeo simple por si acaso
+        if title.lower() in summary.lower() and len(summary) < len(title) * 2.5:
+             # Si el resumen es casi igual al título (ej: repetido), limpiarlo
+             return pattern.sub("", summary).strip(" -—:;.,")
+             
         return summary
 
     def _format_professional_news_message(self, news_item: dict, has_image: bool) -> str:
@@ -367,6 +376,11 @@ Fuente: TradingView"""
                         tweet_text = f"{emoji} {title}\n\n{summary}\n\n{suffix}"
                     else:
                         tweet_text = f"{emoji} {title}\n\n{suffix}"
+                    
+                    # Ensure space at the very end as requested
+                    if not tweet_text.endswith(" "):
+                        tweet_text += " "
+                        
                     def send_twitter():
                         ok = self.twitter.post_tweet(tweet_text[:280], image_path=image_path, category="news")
                         if not ok:
