@@ -76,21 +76,25 @@ class AIConnectivityTester:
         # Verificar health
         if not self.ai_service._ollama_health_ok():
             return False, "Health check falló", None
-        
-        try:
-            response, model = self.ai_service._call_provider(
-                "ollama", 
-                "Responde solo con: OK", 
-                max_tokens=10
-            )
-            
-            if response and "ok" in response.lower():
-                return True, f"Respuesta: {response.strip()}", model
-            else:
-                return False, f"Respuesta inesperada: {response}", model
-                
-        except Exception as e:
-            return False, str(e), None
+        # Probar cada modelo de Ollama configurado (ollama_0, ollama_1, ...)
+        last_err: Optional[Exception] = None
+        for i in range(len(getattr(self.ai_service, 'ollama_models', []))):
+            prov = f"ollama_{i}"
+            try:
+                response, model = self.ai_service._call_provider(
+                    prov,
+                    "Responde solo con: OK",
+                    max_tokens=10
+                )
+                if response and "ok" in response.lower():
+                    return True, f"Respuesta: {response.strip()}", model
+            except Exception as e:
+                last_err = e
+                continue
+
+        if last_err:
+            return False, f"Todos los modelos Ollama fallaron: {last_err}", None
+        return False, "No hay modelos de Ollama para probar", None
     
     def test_gemini(self) -> Tuple[bool, str, Optional[str]]:
         """Prueba conexión con Gemini."""

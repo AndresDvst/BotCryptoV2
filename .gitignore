@@ -53,6 +53,7 @@ chromedriver.exe
 *.crx
 chrome_profile/
 external/
+DocumentacionVPS.md
 
 # Archivos de debug temporal
 *.html
