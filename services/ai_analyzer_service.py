@@ -107,7 +107,8 @@ class AIAnalyzerService:
         self._last_success_model: Optional[str] = None
         self._gemini_model_cache: Optional[str] = None
         
-        # ========== CONFIGURACIÓN MEJORADA DE OLLAMA (3 MODELOS) ==========
+        # Configurar Ollama
+        # ✅ CORREGIDO: Usar método de Config para auto-detectar VPS
         try:
             ollama_host_raw = Config.get_ollama_host() if hasattr(Config, 'get_ollama_host') else getattr(Config, "OLLAMA_HOST", "")
         except:
@@ -116,60 +117,22 @@ class AIAnalyzerService:
         env_ollama_host_raw = getattr(Config, "OLLAMA_HOST", "") or ""
         candidate = self._format_ollama_host(ollama_host_raw)
         env_candidate = self._format_ollama_host(env_ollama_host_raw)
-
         if candidate == "http://localhost:11434" and env_candidate and env_candidate != candidate:
             if not self._quick_ollama_ping(candidate):
                 candidate = env_candidate
-
         self.ollama_host = candidate
-
-        # ✅ Configurar 3 modelos de Ollama con prioridades
-        self.ollama_models = [
-            {
-                'id': 'qwen2.5:7b',
-                'name': 'Qwen 2.5 7B',
-                'priority': 1,  # Mayor prioridad
-                'context_limit': 32768,
-                'use_case': 'general'
-            },
-            {
-                'id': 'deepseek-coder:6.7b',
-                'name': 'DeepSeek Coder 6.7B',
-                'priority': 2,
-                'context_limit': 16384,
-                'use_case': 'code'
-            },
-            {
-                'id': 'llama3.2:3b',
-                'name': 'Llama 3.2 3B',
-                'priority': 3,  # Modelo rápido de respaldo
-                'context_limit': 8192,
-                'use_case': 'fast'
-            }
-        ]
-
-        # Modelo por defecto
-        self.ollama_current_model_index = 0
-        self.ollama_model = self.ollama_models[0]['id']
-
+        self.ollama_model: str = getattr(Config, "OLLAMA_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
         self._ollama_health_cache_seconds: int = int(getattr(Config, "OLLAMA_HEALTH_CACHE_SECONDS", 60) or 60)
         self._ollama_health_last_ts: float = 0.0
         self._ollama_health_last_ok: bool = False
-
+        
         if self.ollama_host:
             self._providers["ollama"] = "ollama"
-            logger.info(f"🦙 Ollama configurado: {self.ollama_host}")
-            logger.info(f"   📦 Modelos disponibles: {len(self.ollama_models)}")
-            for model in self.ollama_models:
-                logger.info(f"      - {model['name']} (prioridad: {model['priority']}, {model['use_case']})")
-            
-            # Detectar VPS
+            logger.info(f"🦙 Ollama configurado: {self.ollama_host} (modelo={self.ollama_model})")
+            # Detectar si estamos en VPS
             is_vps = getattr(Config, "IS_VPS", False) or (getattr(Config, "IS_LINUX", False) and not getattr(Config, "IS_DOCKER", False))
             if is_vps:
-                logger.info("   📍 Detectado VPS/Linux - usando Ollama local como PRIMARIO")
-
-        # Deshabilitar proveedores remotos (opcional)
-        logger.info("☁️  Proveedores remotos deshabilitados - modo local puro")
+                logger.info("   📍 Detectado VPS/Linux - usando Ollama local")
 
         # Configurar Gemini
         try:
@@ -223,225 +186,228 @@ class AIAnalyzerService:
 
         self.check_best_provider()
 
-    def _call_provider(self, provider: str, prompt: str, max_tokens: int = 2048) -> Tuple[str, str]:
-        """Llama a proveedor específico"""
-        start = time.time()
+    def _discover_gemini_model(self) -> Optional[str]:
+        """Descubre el mejor modelo de Gemini disponible."""
+        if not self.gemini_client:
+            return None
+        preferred = [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-2.5-flash",
+        ]
+        try:
+            models = self.gemini_client.models.list()
+            model_names: List[str] = []
+            for m in models:
+                name = getattr(m, "name", None)
+                if isinstance(name, str) and name:
+                    model_names.append(name)
+            for p in preferred:
+                for n in model_names:
+                    if n.endswith(p) or n == p or n.split("/")[-1] == p:
+                        return n.split("/")[-1]
+            if model_names:
+                return model_names[0].split("/")[-1]
+            return None
+        except Exception as e:
+            logger.debug(f"Gemini: no se pudo listar modelos: {e}")
+            return None
+
+    def _get_gemini_model(self) -> Optional[str]:
+        """Obtiene el modelo de Gemini a usar (fijo o dinámico)."""
+        if self.config.GEMINI_MODEL:
+            return self.config.GEMINI_MODEL
         with self._state_lock:
-            self._metrics["requests"][provider] += 1
-
-        def _call() -> Tuple[str, str]:
-            # SOPORTE PARA OLLAMA MULTI-MODELO
-            if provider.startswith("ollama_"):
-                if not self.ollama_host:
-                    raise RuntimeError("Ollama no configurado")
-                
-                try:
-                    model_index = int(provider.split("_")[1])
-                    model_config = self.ollama_models[model_index]
-                except (IndexError, ValueError):
-                    raise RuntimeError(f"Índice de modelo Ollama inválido: {provider}")
-                
-                model_id = model_config['id']
-                model_name = model_config['name']
-                
-                logger.info(f"🦙 Probando Ollama: {model_name}")
-                
-                text = self._call_ollama(prompt, max_tokens=max_tokens, allow_short=False, model_id=model_id)
-                
-                with self._state_lock:
-                    self.ollama_current_model_index = model_index
-                    self.ollama_model = model_id
-                
-                logger.info(f"✅ Éxito con Ollama: {model_name}")
-                return text, model_name
-            
-            # Resto de proveedores (Gemini, OpenRouter, etc.)
-            if provider == "gemini":
-                if not self.gemini_client:
-                    raise RuntimeError("Gemini no configurado")
-                model = self._get_gemini_model()
-                if not model:
-                    raise RuntimeError("Gemini sin modelo compatible (no se pudo descubrir)")
-                last_err: Optional[Exception] = None
-                for attempt in range(GEMINI_MAX_RETRIES):
-                    try:
-                        response = self.gemini_client.models.generate_content(
-                            model=model,
-                            contents=prompt,
-                            config={
-                                "temperature": self.config.GEMINI_TEMPERATURE,
-                                "top_p": 0.95,
-                                "top_k": 40,
-                                "max_output_tokens": max_tokens,
-                            },
-                        )
-                        text = getattr(response, "text", "") or ""
-                        if not text:
-                            raise RuntimeError("Respuesta vacía de Gemini")
-                        return text, model
-                    except Exception as e:
-                        last_err = e
-                        err_str = str(e).lower()
-                        if attempt == 0 and (self._is_quota_error(e) or "timeout" in err_str or "temporar" in err_str):
-                            time.sleep(1)
-                            continue
-                        raise
-                # Si salimos del loop
-                if last_err:
-                    raise last_err
-                raise RuntimeError("Gemini falló sin excepción específica")
-
-            if provider == "openrouter":
-                if not self.openrouter_client:
-                    raise RuntimeError("OpenRouter no configurado")
-                self._ensure_openrouter_models()
-                if not self.openrouter_models:
-                    raise RuntimeError("OpenRouter: no hay modelos :free disponibles")
-                
-                with self._state_lock:
-                    models = list(self.openrouter_models)
-                    last_model = self._openrouter_last_model
-                    indexed_model = None
-                    if 0 <= self.current_openrouter_model_index < len(models):
-                        indexed_model = models[self.current_openrouter_model_index]
-
-                candidates: List[str] = []
-                if last_model and last_model in models:
-                    candidates.append(last_model)
-                if indexed_model and indexed_model not in candidates:
-                    candidates.append(indexed_model)
-                for model in models:
-                    if model not in candidates:
-                        candidates.append(model)
-                    if len(candidates) >= min(len(models), 3):
-                        break
-
-                if not candidates:
-                    raise RuntimeError("OpenRouter: no hay modelos candidatos para probar")
-
-                last_error: Optional[Exception] = None
-                for model in candidates:
-                    try:
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"🤖 OpenRouter probando modelo: {model}")
-                        
-                        response = self.openrouter_client.chat.completions.create(
-                            model=model,
-                            messages=[{"role": "user", "content": prompt}],
-                            max_tokens=max_tokens,
-                            timeout=self._timeout,
-                        )
-                        if not response.choices:
-                            raise RuntimeError(f"Respuesta vacía de OpenRouter ({model})")
-                        
-                        result_text = response.choices[0].message.content or ""
-                        if not result_text.strip():
-                            raise RuntimeError(f"Respuesta vacía de OpenRouter ({model})")
-                        
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"✅ Éxito con OpenRouter modelo: {model}")
-                        
-                        with self._state_lock:
-                            self._openrouter_last_model = model
-                            if model in models:
-                                self.current_openrouter_model_index = models.index(model)
-                        return result_text, model
-                        
-                    except Exception as model_err:
-                        last_error = model_err
-                        err_str = str(model_err).lower()
-                        if "429" in err_str or "rate limit" in err_str:
-                            logger.warning(f"⏳ OpenRouter rate limit con {model}, probando siguiente")
-                            time.sleep(1)
-                        elif "timeout" in err_str or "timed out" in err_str:
-                            logger.warning(f"⏳ OpenRouter timeout con {model}, probando siguiente")
-                        else:
-                            logger.warning(f"⚠️ OpenRouter modelo {model} falló: {err_str[:140]}")
-                        continue
-
-                if last_error:
-                    raise RuntimeError(f"Todos los modelos de OpenRouter fallaron. Último error: {last_error}")
-                else:
-                    raise RuntimeError("OpenRouter: todos los modelos candidatos fallaron sin error específico")
-
-            if provider == "huggingface":
-                if not self.huggingface_api_key:
-                    raise RuntimeError("Hugging Face no configurado")
-                
-                if InferenceClient is None:
-                    raise RuntimeError("Librería 'huggingface_hub' no instalada")
-                
-                # Refrescar catálogo si es necesario
-                self._refresh_huggingface_model_catalog(force=False)
-                if not self.huggingface_models:
-                    self._refresh_huggingface_model_catalog(force=True)
-                if not self.huggingface_models:
-                    raise RuntimeError("HuggingFace: no hay modelos candidatos disponibles")
-
-                # Thread-safe client creation
-                with self._state_lock:
-                    client = self._hf_client
-                    if client is None:
-                        client = InferenceClient(
-                            api_key=self.huggingface_api_key, 
-                            provider="hf-inference", 
-                            timeout=self._timeout
-                        )
-                        self._hf_client = client
-
-                last_error: Optional[Exception] = None
-                for model in self.huggingface_models:
-                    try:
-                        task = self._hf_model_task.get(model, "text-generation")
-                        
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"🤗 HuggingFace probando modelo: {model} (task={task})")
-                        
-                        text = self._call_huggingface_model(client, model, task, prompt, max_tokens=max_tokens)
-                        if not text:
-                            raise RuntimeError("Respuesta vacía")
-
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"✅ Éxito con HuggingFace modelo: {model} (task={task})")
-                        
-                        return text, model
-                            
-                    except Exception as model_err:
-                        err_str = str(model_err).lower()
-                        if "503" in err_str or "loading" in err_str:
-                            logger.warning(f"⏳ HuggingFace modelo {model} cargando (503). Probando siguiente")
-                        elif "429" in err_str or "rate limit" in err_str:
-                            logger.warning(f"⏳ HuggingFace rate limit con {model}. Probando siguiente")
-                            time.sleep(1)
-                        elif "not found" in err_str or "404" in err_str:
-                            logger.warning(f"🧹 HuggingFace modelo inexistente/no accesible: {model}")
-                        elif "not supported for task" in err_str and "supported task" in err_str:
-                            logger.warning(f"🔁 HuggingFace task no compatible con {model}: {str(model_err)[:140]}")
-                        else:
-                            logger.warning(f"⚠️ Error HuggingFace {model}: {err_str[:140]}")
-                        last_error = model_err
-                        continue
-                
-                if last_error:
-                    raise RuntimeError(f"Todos los modelos de HuggingFace fallaron. Último error: {last_error}")
-                else:
-                    raise RuntimeError("HuggingFace: no se pudo probar ningún modelo")
-
-            raise RuntimeError(f"Proveedor desconocido: {provider}")
-        
-        result = self._run_with_timeout(_call, timeout_seconds=self._timeout)
-        
-        if isinstance(result, Exception):
+            if self._gemini_model_cache:
+                return self._gemini_model_cache
+        model = self._discover_gemini_model()
+        if model:
             with self._state_lock:
-                self._metrics["failures"][provider] += 1
-            raise result
-        
-        elapsed = time.time() - start
-        with self._state_lock:
-            self._metrics["total_time"][provider] += elapsed
-        
-        text, model = result
-        return str(text), model
+                self._gemini_model_cache = model
+        return model
+
+    def _discover_openrouter_free_models(self, api_key: str) -> List[str]:
+        """Descubre modelos gratuitos de OpenRouter."""
+        try:
+            resp = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"⚠️ OpenRouter: no se pudo listar modelos (HTTP {resp.status_code})")
+                return []
+            payload = resp.json() or {}
+            items = payload.get("data") or []
+            if not isinstance(items, list):
+                return []
+            free_ids: List[str] = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                mid = it.get("id")
+                if isinstance(mid, str) and mid.endswith(":free"):
+                    free_ids.append(mid)
+            free_ids = list(dict.fromkeys(free_ids))
+            return free_ids[: self.config.OPENROUTER_MODEL_DISCOVERY_LIMIT]
+        except Exception as e:
+            logger.debug(f"OpenRouter: no se pudo descubrir modelos gratuitos: {e}")
+            return []
+
+    def _refresh_huggingface_model_catalog(self, force: bool = False) -> None:
+        """Refresca el catálogo de modelos de HuggingFace."""
+        if not self.huggingface_api_key:
+            return
+        now = time.time()
+        if (not force) and (now - self._hf_models_last_refresh_ts) < self.config.HF_MODEL_DISCOVERY_REFRESH_SECONDS:
+            return
+        models, task_map = self._discover_huggingface_public_free_candidates()
+        if not models:
+            return
+        verified_models, verified_task_map = self._validate_huggingface_candidates(models, task_map)
+        if verified_models:
+            with self._state_lock:
+                self.huggingface_models = verified_models
+                self._hf_model_task = verified_task_map
+                self._hf_models_last_refresh_ts = now
+
+    def _discover_huggingface_public_free_candidates(self) -> Tuple[List[str], Dict[str, str]]:
+        """Descubre candidatos de modelos públicos de HuggingFace."""
+        if InferenceClient is None:
+            return [], {}
+
+        def parse_billion_hint(model_id: str) -> Optional[float]:
+            s = model_id.lower()
+            m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", s)
+            if not m:
+                m = re.search(r"[-_/](\d+(?:\.\d+)?)b[-_/]", s)
+            if not m:
+                return None
+            try:
+                return float(m.group(1))
+            except Exception:
+                return None
+
+        def is_preferred_name(model_id: str) -> bool:
+            s = model_id.lower()
+            if any(k in s for k in ["instruct", "instruction", "chat", "-it", "_it", "assistant"]):
+                return True
+            return False
+
+        def fetch(tag: str, search: str) -> List[Dict[str, Any]]:
+            try:
+                resp = requests.get(
+                    "https://huggingface.co/api/models",
+                    params={
+                        "pipeline_tag": tag,
+                        "search": search,
+                        "sort": "downloads",
+                        "direction": -1,
+                        "limit": self.config.HF_MODEL_DISCOVERY_LIMIT,
+                    },
+                    timeout=self.config.HF_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"⚠️ HuggingFace: listado modelos falló (HTTP {resp.status_code}) tag={tag} search={search}")
+                    return []
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+                return []
+            except Exception as e:
+                logger.debug(f"HuggingFace: error consultando api/models: {e}")
+                return []
+
+        raw: List[Dict[str, Any]] = []
+        for tag in ["conversational", "text-generation"]:
+            for search in ["instruct", "chat"]:
+                raw.extend(fetch(tag, search))
+
+        seen: set = set()
+        candidates: List[Tuple[str, str, int, int, Optional[float]]] = []
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            model_id = it.get("modelId") or it.get("id")
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            if it.get("private") is True:
+                continue
+            if it.get("gated") is True:
+                continue
+            pipeline_tag = it.get("pipeline_tag")
+            if pipeline_tag not in ("conversational", "text-generation"):
+                continue
+            if not is_preferred_name(model_id):
+                continue
+            size_hint = parse_billion_hint(model_id)
+            if size_hint is not None and size_hint > float(self.config.HF_MAX_BILLIONS):
+                continue
+            downloads = it.get("downloads") or 0
+            likes = it.get("likes") or 0
+            try:
+                downloads_i = int(downloads)
+            except Exception:
+                downloads_i = 0
+            try:
+                likes_i = int(likes)
+            except Exception:
+                likes_i = 0
+            candidates.append((model_id, pipeline_tag, downloads_i, likes_i, size_hint))
+
+        candidates.sort(key=lambda x: (x[4] is None, x[4] or 0.0, -x[2], -x[3], x[0]))
+        selected: List[str] = []
+        task_map: Dict[str, str] = {}
+        for model_id, pipeline_tag, _, __, ___ in candidates[: self.config.HF_MODEL_DISCOVERY_LIMIT]:
+            selected.append(model_id)
+            task_map[model_id] = pipeline_tag
+        return selected, task_map
+
+    def _validate_huggingface_candidates(self, model_ids: List[str], task_map: Dict[str, str]) -> Tuple[List[str], Dict[str, str]]:
+        """Valida candidatos de HuggingFace con pruebas rápidas."""
+        if not self.huggingface_api_key or InferenceClient is None:
+            return [], {}
+
+        client = InferenceClient(
+            api_key=self.huggingface_api_key,
+            provider="hf-inference",
+            timeout=self.config.HF_VALIDATE_TIMEOUT_SECONDS,
+        )
+
+        verified: List[str] = []
+        verified_task: Dict[str, str] = {}
+
+        def quick_probe(mid: str, preferred_task: str) -> Optional[str]:
+            prompt = "Responde solo con: OK"
+            try:
+                text = self._call_huggingface_model(client, mid, preferred_task, prompt, max_tokens=8).strip()
+                if text:
+                    return preferred_task
+            except Exception as e:
+                s = str(e).lower()
+                if "not supported for task" in s and "supported task" in s:
+                    alt = "conversational" if preferred_task == "text-generation" else "text-generation"
+                    try:
+                        text = self._call_huggingface_model(client, mid, alt, prompt, max_tokens=8).strip()
+                        if text:
+                            return alt
+                    except Exception:
+                        return None
+                if any(kw in s for kw in ["402", "payment", "billing", "401", "unauthorized", "403", "forbidden", "gated", "404", "not found"]):
+                    return None
+                if "429" in s or "rate limit" in s:
+                    time.sleep(1)
+                    return None
+                if "503" in s or "loading" in s:
+                    return None
+                return None
+            return None
 
         limit = min(len(model_ids), self.config.HF_VALIDATE_MAX_CANDIDATES)
         for mid in model_ids[:limit]:
@@ -494,25 +460,20 @@ class AIAnalyzerService:
             h = f"http://{h}"
         return h.rstrip("/")
 
-    def _call_ollama(self, prompt: str, max_tokens: int, allow_short: bool = False, model_id: Optional[str] = None) -> str:
-        """Llama a Ollama con modelo específico o actual"""
+    def _call_ollama(self, prompt: str, max_tokens: int, allow_short: bool = False) -> str:
+        """Llama a Ollama para generar texto."""
         host = self._format_ollama_host(self.ollama_host)
         if not host:
             raise RuntimeError("Ollama no configurado")
-        
-        model_to_use = model_id if model_id else self.ollama_model
-        
         payload: Dict[str, Any] = {
-            "model": model_to_use,
+            "model": self.ollama_model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {"num_predict": max(1, int(max_tokens))},
         }
-        
         resp = requests.post(f"{host}/api/chat", json=payload, timeout=self._http_timeout)
         if resp.status_code != 200:
-            raise RuntimeError(f"Ollama falló (HTTP {resp.status_code}) con modelo {model_to_use}")
-        
+            raise RuntimeError(f"Ollama falló (HTTP {resp.status_code})")
         data = resp.json() or {}
         text = ""
         msg = data.get("message")
@@ -521,8 +482,7 @@ class AIAnalyzerService:
         if not text and isinstance(data.get("response"), str):
             text = data.get("response") or ""
         if not text and not allow_short:
-            raise RuntimeError(f"Respuesta vacía de Ollama (modelo: {model_to_use})")
-        
+            raise RuntimeError("Respuesta vacía de Ollama")
         return text
 
     def _quick_ollama_ping(self, host: str) -> bool:
@@ -568,38 +528,35 @@ class AIAnalyzerService:
             self._ollama_health_last_ok = ok
         return ok
     def _get_provider_priority_list(self) -> List[str]:
-        """Lista priorizada: Ollama 3 modelos"""
+        """Obtiene lista priorizada de proveedores disponibles."""
         available: List[str] = []
-        
-        # Ollama con 3 modelos
         if self._ollama_health_ok():
-            for i, model_config in enumerate(self.ollama_models):
-                available.append(f"ollama_{i}")  # ollama_0, ollama_1, ollama_2
-
-        # Opcional: otros proveedores como fallback
+            available.append("ollama")
         if self.gemini_client:
             available.append("gemini")
         if self.openrouter_client:
             available.append("openrouter")
+        if self.huggingface_api_key:
+            available.append("huggingface")
 
         if not available:
             return []
 
         providers: List[str] = []
-
+        # Priorizar último exitoso
         with self._state_lock:
             last_success = self._last_success_provider
             active = self.active_provider
-
+        
         if last_success in available:
             providers.append(last_success)
         elif active in available:
             providers.append(active)
-
-        default_order = [f"ollama_{i}" for i in range(len(self.ollama_models))] + ["gemini", "openrouter"]
+        
+        # Luego orden por defecto
+        default_order = ["ollama", "gemini", "openrouter", "huggingface"]
         providers.extend(p for p in default_order if p in available and p not in providers)
         providers.extend(p for p in available if p not in providers)
-
         return providers
 
     def _record_success(self, provider: str, model: str) -> None:
